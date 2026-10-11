@@ -1,14 +1,32 @@
 """Simplified annual resident tax for ONE person, in nominal AUD.
 
 Excludes offsets (including LITO/SAPTO), Medicare low-income reductions and
-exemptions, Medicare levy surcharge, HELP, Division 293 and excess-contribution
-tax. The projection must disclose these limitations and an assumed income split
+exemptions, Medicare levy surcharge, HELP and Division 293. Excess concessional
+income inclusion and its non-refundable offset are modeled, without release
+elections. The projection must disclose these limitations and an assumed income split
 when only combined couple income is available. This is not an ATO tax estimator.
 """
 
 from math import isfinite
 
-from config import CONTRIBUTIONS_TAX_RATE, MEDICARE_LEVY_RATE, RESIDENT_TAX_BRACKETS
+from config import (
+    CONTRIBUTIONS_TAX_RATE, EXCESS_CONTRIBUTIONS_OFFSET_RATE,
+    MEDICARE_LEVY_RATE, RESIDENT_TAX_BRACKETS,
+)
+
+
+def income_tax_with_excess(taxable_income: float, excess_contributions: float) -> float:
+    """Add excess concessional income and apply the 15% income-tax offset.
+
+    The non-refundable offset cannot reduce income tax below zero and does not
+    reduce Medicare levy. This handles an excess crossing marginal brackets.
+    Extra tax is paid from household cash, while contributions remain in super.
+    """
+    _validate_amount(taxable_income)
+    _validate_amount(excess_contributions)
+    income = taxable_income + excess_contributions
+    offset = excess_contributions * EXCESS_CONTRIBUTIONS_OFFSET_RATE
+    return max(0.0, resident_income_tax(income) - offset) + medicare_levy(income)
 
 
 def _validate_amount(amount: float) -> None:

@@ -8,7 +8,7 @@ import pytest
 from config import Assumptions
 from engine.projection import (
     Household, annual_loan_payment, minimum_drawdown_rate, money_lasts_until,
-    project, sustainable_income, todays_dollars,
+    project, sustainable_income, todays_dollars, indexed_concessional_cap,
 )
 
 
@@ -191,3 +191,55 @@ def test_projection_is_repeatable_and_balances_nonnegative() -> None:
     pd.testing.assert_frame_equal(first, project(h))
     assert (first[["super", "investments", "cash", "mortgage", "other_debts", "shortfall"]] >= 0).all().all()
     assert first.iloc[-1].partner_age == 92
+
+
+@pytest.mark.parametrize("year, growth, expected", [
+    (0, .035, 32500), (1, .035, 32500), (2, .035, 32500),
+    (3, .035, 35000), (1, .1, 35000), (2, .1, 37500),
+    (10, 0, 32500), (10, -.01, 32500),
+])
+def test_cap_indexation_steps(year, growth, expected):
+    assert indexed_concessional_cap(year, growth) == expected
+
+
+def test_400k_single_excess_keeps_super_and_taxes_cash():
+    h = household(gross_salary=400_000, salary_sacrifice=20_000)
+    a = assumptions(life_expectancy=61)
+    frame = project(h, a)
+    row = frame.iloc[0]
+    assert row.concessional_cap == 32_500
+    assert row.super_contributions == pytest.approx(48_000 * .85)
+    assert row.salary_sacrifice == 0
+    assert row.rejected_contributions == 20_000
+    assert row.excess_concessional_contributions == 15_500
+    assert row.excess_contributions_tax == pytest.approx(4_960)
+    assert row.income_tax == pytest.approx(158_830)
+    assert row.cash + row.investments == pytest.approx(241_170)
+    assert {w['code'] for w in frame.attrs['warnings']} == {'salary_sacrifice_trimmed', 'excess_concessional'}
+    assert sustainable_income(h, a).feasible
+
+
+def test_400k_couple_caps_are_per_person():
+    h = household(partner_age=60, gross_salary=400_000, salary_sacrifice=20_000)
+    a = assumptions(life_expectancy=61)
+    equal = project(h, a).iloc[0]
+    assert equal.salary_sacrifice == 17_000
+    assert equal.excess_concessional_contributions == 0
+    assert equal.excess_contributions_tax == 0
+    frame = project(h, replace(a, primary_income_share=.9))
+    unequal = frame.iloc[0]
+    assert unequal.salary_sacrifice == pytest.approx(2_000)
+    assert unequal.excess_concessional_contributions == pytest.approx(10_700)
+    assert unequal.excess_contributions_tax == pytest.approx(3_424)
+    assert {w['person'] for w in frame.attrs['warnings'] if w['code'] == 'excess_concessional'} == {1}
+
+
+def test_400k_future_cap_and_retirement():
+    h = household(gross_salary=400_000, retirement_age=64)
+    a = assumptions(wage_growth=.035, life_expectancy=64)
+    frame = project(h, a)
+    assert frame.concessional_cap.tolist() == [32500, 32500, 32500, 35000, 35000]
+    assert frame.iloc[3].excess_concessional_contributions == pytest.approx(400000 * 1.035**3 * .12 - 35000)
+    assert frame.iloc[4].excess_concessional_contributions == 0
+    assert frame.iloc[4].excess_contributions_tax == 0
+    pd.testing.assert_frame_equal(frame, project(h, a))

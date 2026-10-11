@@ -55,7 +55,7 @@ the theme and imports resolve correctly.
 Tax is per individual. A couple's combined income cannot determine exact tax;
 the UI discloses editable allocation assumptions. The simplified levy
 can overestimate tax for low incomes. Offsets, levy exemptions/surcharge, HELP,
-Division 293 and excess-contribution rules are excluded. Super caps are per
+Division 293 is excluded. Excess concessional contributions are added to taxable income with a 15% offset; release elections are excluded. Super caps are per
 person. Tax brackets stay at the 2026–27 snapshot; scheduled future tax changes
 are not modeled. There is no persistent server scenario storage.
 
@@ -183,7 +183,7 @@ salary sacrifice and contributions are allocated using the primary income share;
 initial super uses the primary super share. Both shares default to 50% for couples.
 Voluntary contributions are limited to per-person modeled caps; the DataFrame
 reports actual and rejected amounts, so the UI must display a warning when any
-are rejected. Employer contributions exceeding the cap raise a clear error.
+are rejected. Employer contributions exceeding the cap remain in super and produce warnings rather than errors. Salary sacrifice is trimmed first. The cap follows cumulative wage growth, rounded down in $2,500 steps without falling below the initial cap. Excess contributions are added to individual taxable income with a non-refundable 15% offset; additional tax is paid outside super. Release elections and interaction with the non-concessional cap are excluded.
 No carry-forward/bring-forward rules are implemented. Personal after-tax contributions
 stop from age 75, and non-concessional eligibility uses opening modeled super
 against the general transfer cap (a simplified proxy for prior-year eligibility).
@@ -213,8 +213,9 @@ arrears is added. A shortfall indicates this cash-flow path cannot be funded.
 Pension assessment uses opening assets, salary, net rent and other income.
 Retirement pension balances are assessable; under-67 accumulation is exempt.
 Rates AND thresholds grow at the editable pension-indexation assumption (2.5%
-default), not a prediction of future government policy. Tax brackets and super
-caps remain at the 2026–27 snapshot: scheduled future tax changes are not modeled.
+default), not a prediction of future government policy. The concessional cap
+uses wage growth as an AWOTE proxy, rounded down in $2,500 steps. Tax brackets
+and other super caps remain at the 2026–27 snapshot: scheduled future tax changes are not modeled.
 The family home is excluded from `net_worth` because no home value is collected.
 All tax/pension exclusions described above still apply, including Division 293/296.
 DataFrame `attrs['limitations']` provides disclosure text; the UI explains these
@@ -236,7 +237,7 @@ Super source references:
 - [Minimum pension percentages, Schedule 5](https://www.legislation.gov.au/F1997B02633/2026-04-21/2026-04-21/text)
 - [CSC 2026–27 cap summary](https://www.csc.gov.au/advisers/news/2026-05-federal-budget-2026-27)
 
-Validation: 144 pytest cases pass across engines, JSON handling and Streamlit
+Validation: 164 pytest cases pass across engines, JSON handling and Streamlit
 AppTest interaction tests. These are headless behavior checks, not browser
 screenshot or mobile layout verification.
 

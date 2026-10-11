@@ -109,3 +109,15 @@ def test_reset_and_new_session_do_not_retain_answers() -> None:
     assert "calculation" not in app.session_state
     fresh = open_app()
     assert fresh.session_state["draft"] == asdict(Household())
+
+
+def test_400k_results_warn_instead_of_error():
+    app = open_app()
+    app.session_state['draft'] = asdict(Household(age=60, retirement_age=61, gross_salary=400_000, salary_sacrifice=20_000))
+    app.session_state['assumptions'] = replace(DEFAULT_ASSUMPTIONS, life_expectancy=62)
+    app.session_state['screen'] = 'results'
+    app.run()
+    assert not app.exception
+    assert not any("couldn't calculate" in x.value for x in app.error)
+    assert any('Employer super exceeds' in x.value for x in app.warning)
+    assert any('You can afford' in x.value for x in app.subheader)

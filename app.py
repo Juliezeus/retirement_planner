@@ -9,7 +9,7 @@ import streamlit as st
 
 from config import (
     ASFA_ANNUAL_SPENDING, ASFA_QUARTER, ASFA_SOURCE, Assumptions, CLOSE_RATIO,
-    CONCESSIONAL_CAP, DEFAULT_ASSUMPTIONS, DISCLAIMER, FINANCIAL_YEAR,
+    MODEL_REVISION, CONCESSIONAL_CAP, DEFAULT_ASSUMPTIONS, DISCLAIMER, FINANCIAL_YEAR,
     MAX_CHILDREN, MAX_INPUT_MONEY, NON_CONCESSIONAL_CAP, PENSION_SOURCES,
     RATES_REVIEW_DATE, SUPER_GUARANTEE_RATE, TRANSFER_BALANCE_CAP,
     AGE_PENSION_AGE, PRESERVATION_AGE, CONTRIBUTIONS_TAX_RATE,
@@ -315,7 +315,7 @@ def statutory_assumptions() -> None:
     from config import (PENSION_ASSET_FREE_AREA, PENSION_INCOME_FREE_AREA_FORTNIGHTLY,
         DEEMING_THRESHOLD, DEEMING_LOWER_RATE, DEEMING_UPPER_RATE,
         PENSION_MAX_FORTNIGHTLY, MINIMUM_DRAWDOWN_RATES, RESIDENT_TAX_BRACKETS)
-    st.caption(f"Model year {FINANCIAL_YEAR} · Rates reviewed {RATES_REVIEW_DATE}. Super caps and tax brackets stay fixed in future years.")
+    st.caption(f"Model year {FINANCIAL_YEAR} · Rates reviewed {RATES_REVIEW_DATE}. The before-tax cap grows with salaries in $2,500 steps; other caps and tax brackets stay fixed.")
     st.markdown(f"Employer super **{SUPER_GUARANTEE_RATE:.0%}** · Contributions tax **{CONTRIBUTIONS_TAX_RATE:.0%}** · Effective accumulation earnings tax **{ACCUMULATION_EARNINGS_TAX_RATE:.0%}** · Retirement-phase earnings tax **{RETIREMENT_EARNINGS_TAX_RATE:.0%}**. Before-tax cap **{currency(CONCESSIONAL_CAP)}**, after-tax cap **{currency(NON_CONCESSIONAL_CAP)}**, retirement transfer cap **{currency(TRANSFER_BALANCE_CAP)}**, all per person.")
     st.markdown(f"Super access assumes eligible retirement from **{PRESERVATION_AGE}**; Age Pension starts from **{AGE_PENSION_AGE}**. Minimum yearly pension withdrawals:")
     st.markdown("; ".join(f"{'under ' + str(MINIMUM_DRAWDOWN_RATES[i + 1][0]) if low == 0 else str(low) + ('+' if i == len(MINIMUM_DRAWDOWN_RATES) - 1 else '–' + str(MINIMUM_DRAWDOWN_RATES[i + 1][0] - 1))}: **{rate:.0%}**" for i, (low, rate) in enumerate(MINIMUM_DRAWDOWN_RATES)))
@@ -360,7 +360,7 @@ def results() -> None:
     assumptions_panel(h)
     a = st.session_state.assumptions
     try:
-        fingerprint = dump_scenario(h, a)
+        fingerprint = (MODEL_REVISION, dump_scenario(h, a))
         cached = st.session_state.get("calculation")
         if cached is None or cached[0] != fingerprint:
             with st.spinner("Working through each year of your plan…"):
@@ -400,6 +400,17 @@ def results() -> None:
     rejected = real.rejected_contributions.max()
     if rejected > .01:
         st.warning(f"Some voluntary super contributions could not be accepted under modeled caps or eligibility. The largest yearly unaccepted amount is {currency(rejected)} in today's dollars; it stays outside super.")
+    warnings = projection.attrs.get("warnings", [])
+    if any(w["code"] == "excess_concessional" for w in warnings):
+        st.warning(f"Employer super exceeds the modeled before-tax cap in some years. The largest yearly excess is {currency(real.excess_concessional_contributions.max())} in today's dollars. It remains in super and is added to taxable income with a 15% tax offset; additional tax is funded outside super.")
+    if warnings:
+        with st.expander("Super contribution adjustments"):
+            groups = {}
+            for warning in warnings:
+                groups.setdefault((warning["person"], warning["code"]), []).append(warning)
+            for (person, _), entries in groups.items():
+                first = entries[0]
+                st.markdown(f"**Person {person}, {len(entries)} year(s), starting at your age {first['age']}:** {first['message']} First adjustment: {currency(first['amount'])} in future dollars.")
     st.divider()
     st.subheader("Your assets over time")
     future = st.toggle("Show future dollars", value=False, key="future_dollars",
@@ -412,7 +423,7 @@ def results() -> None:
         st.markdown("Today's dollars remove price growth to show current buying power; future dollars include it. A funding gap does not necessarily mean every asset is exhausted. A later pension may restore coverage after a gap.")
         st.markdown("Couples use the editable income and super allocations above. Both retire together and stay a couple throughout. There is no death or survivor transition. The younger partner's planning age sets the horizon.")
         st.markdown("Returns are steady assumptions, not forecasts. Shares use an after-tax total return; franking credits and separate capital gains tax are excluded. Super withdrawals assume a taxed fund and eligible retirement access.")
-        st.markdown("Age Pension residence and claim eligibility are assumed. Work Bonus, Rent Assistance, overseas rules, gifting and special income streams are excluded. Tax offsets, Medicare low-income adjustments, HELP and extra high-income/high-balance super taxes are excluded. Future tax brackets and super caps stay at the 2026–27 snapshot.")
+        st.markdown("Age Pension residence and claim eligibility are assumed. Work Bonus, Rent Assistance, overseas rules, gifting and special income streams are excluded. Tax offsets except the excess-contribution offset, Medicare low-income adjustments, HELP and extra high-income/high-balance super taxes are excluded. Future tax brackets and super caps stay at the 2026–27 snapshot.")
         st.markdown("Child costs, debt repayments and extra contributions are added on top of living spending. The solver requires every year to be funded and does not preserve an inheritance target. The model never automatically sells property or borrows to fund gaps.")
     st.info(DISCLAIMER)
 

@@ -8,19 +8,19 @@ apply. The final row funds the full year beginning at life expectancy.
 """
 
 from dataclasses import dataclass, fields, replace
-from math import isfinite
+from math import floor, isfinite
 
 import pandas as pd
 
 from config import (
     ACCUMULATION_EARNINGS_TAX_RATE, AGE_PENSION_AGE, Assumptions,
-    CONCESSIONAL_CAP, DEFAULT_ASSUMPTIONS, MINIMUM_DRAWDOWN_RATES,
+    CONCESSIONAL_CAP, CONCESSIONAL_CAP_INDEX_STEP, DEFAULT_ASSUMPTIONS, MINIMUM_DRAWDOWN_RATES,
     NON_CONCESSIONAL_CAP, PRESERVATION_AGE, SHORTFALL_TOLERANCE,
     SOLVER_MAX_INCOME, SOLVER_MAX_ITERATIONS, SOLVER_TOLERANCE,
     SUPER_GUARANTEE_RATE, TRANSFER_BALANCE_CAP,
 )
 from engine.age_pension import estimate_age_pension
-from engine.tax import contributions_tax, total_income_tax
+from engine.tax import contributions_tax, income_tax_with_excess, total_income_tax
 
 
 @dataclass(frozen=True)
@@ -140,23 +140,64 @@ def _withdraw(balances: list[float], need: float) -> float:
     return taken
 
 
+def indexed_concessional_cap(year: int, wage_growth: float) -> float:
+    """Round cumulative wage-linked growth down to $2,500 steps, never below base.
+
+    This is a scenario assumption; actual legislated indexation uses AWOTE.
+    Grow the unrounded base cumulatively so small annual increases are retained.
+    """
+    _number(year, "year")
+    _number(wage_growth, "wage_growth", -.99)
+    if not isinstance(year, int):
+        raise ValueError("year must be a whole number.")
+    raw_cap = CONCESSIONAL_CAP * (1 + wage_growth) ** year
+    return float(max(CONCESSIONAL_CAP,
+        floor(raw_cap / CONCESSIONAL_CAP_INDEX_STEP) * CONCESSIONAL_CAP_INDEX_STEP))
+
+
+@dataclass(frozen=True)
+class ContributionResult:
+    """Per-person accepted contributions and explainable soft-limit outcomes."""
+
+    additions: list[float]
+    sacrifices: list[float]
+    excesses: list[float]
+    after_tax: float
+    rejected: float
+    warnings: list[dict]
+
+
 def _contributions(salary: float, sacrifice: float, after_tax: float,
-                   balances: list[float], shares: list[float], ages: list[int]) -> tuple[list[float], list[float], float, float]:
-    """Limit voluntary payments to fixed per-person caps; report rejected amounts."""
-    additions, sacrifices, actual_after_tax, rejected = [], [], 0.0, 0.0
+                   balances: list[float], shares: list[float], ages: list[int],
+                   cap: float) -> ContributionResult:
+    """Trim sacrifice first; retain employer excess and return warnings."""
+    additions, sacrifices, excesses, warnings = [], [], [], []
+    actual_after_tax, rejected = 0.0, 0.0
     for balance, share, age in zip(balances, shares, ages):
         sg = salary * share * SUPER_GUARANTEE_RATE
-        if sg > CONCESSIONAL_CAP:
-            raise ValueError("Employer super exceeds the modeled per-person cap; excess-contribution tax is unsupported.")
         # Salary sacrifice is an employer contribution; the under-75 limit
         # below applies to the modeled personal after-tax contributions only.
-        voluntary = min(sacrifice * share, salary * share, max(0.0, CONCESSIONAL_CAP - sg))
+        voluntary = min(sacrifice * share, salary * share, max(0.0, cap - sg))
+        excess = max(0.0, sg + voluntary - cap)
         noncon = min(after_tax * share, NON_CONCESSIONAL_CAP) if age < 75 and balance < TRANSFER_BALANCE_CAP else 0.0
         additions.append(sg + voluntary - contributions_tax(sg + voluntary) + noncon)
         sacrifices.append(voluntary)
+        excesses.append(excess)
         actual_after_tax += noncon
         rejected += (sacrifice + after_tax) * share - voluntary - noncon
-    return additions, sacrifices, actual_after_tax, rejected
+        person = len(additions)
+        if sacrifice * share > voluntary:
+            warnings.append(dict(code="salary_sacrifice_trimmed", person=person,
+                amount=sacrifice * share - voluntary,
+                message="Salary sacrifice reduced to fit the modeled before-tax cap."))
+        if excess:
+            warnings.append(dict(code="excess_concessional", person=person, amount=excess,
+                message="Employer super exceeds the modeled cap. Excess is retained in super and added to taxable income with a 15% offset; extra tax is paid from household cash."))
+        if after_tax * share > noncon:
+            warnings.append(dict(code="after_tax_trimmed", person=person,
+                amount=after_tax * share - noncon,
+                message="After-tax super contributions reduced under modeled caps or eligibility."))
+    return ContributionResult(additions, sacrifices, excesses, actual_after_tax, rejected, warnings)
 
 
 def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
@@ -165,8 +206,9 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
     Investments use after-tax total returns, cash interest is taxed as income,
     rent grows with inflation less an editable expense allowance. Other income
     continues in retirement. Mortgage is assumed secured on the exempt home.
-    Property is never automatically sold. Tax brackets and super caps are held
-    fixed; pension rates AND thresholds grow by pension_indexation (assumption).
+    Property is never automatically sold. Tax brackets and other super caps stay
+    fixed; concessional cap uses wage growth in $2,500 steps. Pension rates AND
+    thresholds grow by pension_indexation. Both indexation paths are assumptions.
     """
     validate_scenario(h, a)
     couple = h.partner_age is not None
@@ -181,7 +223,7 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
     debt_payment = annual_loan_payment(debt, a.other_debt_rate, a.other_debt_years)
     # Fund the younger partner to the same assumed longevity; no death transition.
     horizon = a.life_expectancy - min(h.age, h.partner_age if couple else h.age)
-    rows = []
+    rows, warnings = [], []
     for year in range(horizon + 1):
         age = h.age + year
         ages = [age, h.partner_age + year] if couple else [age]
@@ -211,11 +253,15 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         for i in range(len(ages)):
             accumulation[i] *= 1 + a.super_return * (1 - ACCUMULATION_EARNINGS_TAX_RATE) - a.super_fees
             pensions[i] *= 1 + a.super_return - a.super_fees
-        additions, sacrifices, after_tax, rejected = _contributions(
+        cap = indexed_concessional_cap(year, a.wage_growth)
+        contributions = _contributions(
             salary, h.salary_sacrifice if not retired else 0.0,
             h.after_tax_contributions if not retired else 0.0,
-            opening_accumulation, income_shares, ages,
+            opening_accumulation, income_shares, ages, cap,
         )
+        additions, sacrifices = contributions.additions, contributions.sacrifices
+        after_tax, rejected = contributions.after_tax, contributions.rejected
+        warnings.extend(dict(warning, year=year, age=age) for warning in contributions.warnings)
         sacrifice = sum(sacrifices)
         for i, addition in enumerate(additions):
             accumulation[i] += addition
@@ -223,10 +269,14 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         # explicit split. Pension is allocated only to eligible recipients.
         eligible = [person_age >= AGE_PENSION_AGE for person_age in ages]
         count = sum(eligible)
-        tax = sum(total_income_tax(max(0.0,
+        taxable_incomes = [max(0.0,
             (salary + other_income + rent + cash_interest) * share - sacrifices[i]
-            + (pension / count if eligible[i] else 0.0)))
-            for i, share in enumerate(income_shares))
+            + (pension / count if eligible[i] else 0.0))
+            for i, share in enumerate(income_shares)]
+        base_tax = sum(total_income_tax(income) for income in taxable_incomes)
+        tax = sum(income_tax_with_excess(income, excess)
+                  for income, excess in zip(taxable_incomes, contributions.excesses))
+        excess_tax = tax - base_tax
         mortgage, mortgage_paid = _pay_loan(mortgage, h.mortgage_rate, mortgage_payment)
         debt, debt_paid = _pay_loan(debt, a.other_debt_rate, debt_payment)
         children_cost = sum(child + year < 18 for child in h.children_ages) * a.annual_child_cost * inflation
@@ -278,19 +328,23 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
             super_income=minimum_taken + super_taken, investment_income=liquid_taken,
             income_tax=tax, salary_sacrifice=sacrifice, after_tax_contributions=after_tax,
             super_contributions=sum(additions), rejected_contributions=rejected,
+            concessional_cap=cap, excess_concessional_contributions=sum(contributions.excesses),
+            excess_contributions_tax=excess_tax,
             net_income=net_income, target_income=target, child_costs=children_cost,
             mortgage_payment=mortgage_paid, other_debt_payment=debt_paid,
             unpaid_debt_service=restored_mortgage + restored_other,
             total_expenses=expenses, shortfall=max(0.0, need),
         ))
     frame = pd.DataFrame(rows)
+    frame.attrs["warnings"] = warnings
     frame.attrs["limitations"] = [
         "Both partners retire together; no death or survivor transition.",
         "Combined income and super use editable allocation assumptions.",
         "Investment total return is after tax; no separate dividends or capital gains tax.",
         "Net worth excludes the family home; investment property is not sold to fund gaps.",
-        "Tax brackets and super caps are fixed; pension indexation is an assumption.",
-        "Tax offsets, Medicare reductions, Work Bonus, Division 293/296 and excess-contribution tax are excluded.",
+        "Concessional caps use wage growth in $2,500 steps; other caps and tax brackets stay fixed. Future indexation is an assumption.",
+        "Tax offsets except the excess-contribution offset, Medicare reductions, Work Bonus and Division 293/296 are excluded.",
+        "Excess employer contributions stay in super; release elections and their non-concessional-cap interaction are not modeled.",
         "Voluntary contributions are limited to modeled caps and reported as rejected_contributions.",
         "Unfunded expenses are reported without new borrowing; repay loans before discretionary spending.",
     ]

@@ -4,7 +4,7 @@ import pytest
 
 from engine.tax import (
     after_tax_income, contributions_tax, medicare_levy,
-    resident_income_tax, total_income_tax,
+    resident_income_tax, total_income_tax, income_tax_with_excess,
 )
 
 
@@ -40,3 +40,17 @@ def test_invalid_amounts(function, amount: float) -> None:
 def test_individual_tax_is_not_household_tax() -> None:
     assert 2 * total_income_tax(50_000) == pytest.approx(13_040)
     assert total_income_tax(100_000) == pytest.approx(22_520)
+
+
+@pytest.mark.parametrize("income, excess, expected", [
+    (400_000, 15_500, 158_830), (44_000, 2_000, 4_940),
+    (0, 1_000, 20), (100_000, 0, 22_520),
+])
+def test_excess_contributions_tax(income, excess, expected):
+    assert income_tax_with_excess(income, excess) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("income, excess", [(-1, 0), (0, -1), (0, float("nan")), (float("inf"), 0)])
+def test_excess_tax_invalid_inputs(income, excess):
+    with pytest.raises(ValueError):
+        income_tax_with_excess(income, excess)
