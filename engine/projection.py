@@ -65,6 +65,22 @@ class Household:
     retirement_income: float = 56_166
 
     def __post_init__(self) -> None:
+        if isinstance(self.lifestyle_goals, (list, tuple)):
+            normalized_goals = []
+            expected_fields = {
+                "category", "amount", "frequency", "start_age", "finish_age",
+            }
+            for goal in self.lifestyle_goals:
+                if isinstance(goal, LifestyleGoal):
+                    normalized_goals.append(goal)
+                elif isinstance(goal, dict) and set(goal) == expected_fields:
+                    try:
+                        normalized_goals.append(LifestyleGoal(**goal))
+                    except TypeError as exc:
+                        raise ValueError("Lifestyle goal details could not be read.") from exc
+                else:
+                    raise ValueError("Lifestyle goal details could not be read.")
+            object.__setattr__(self, "lifestyle_goals", tuple(normalized_goals))
         if self.partner_age is not None and self.partner_retirement_age is None:
             object.__setattr__(
                 self, "partner_retirement_age",

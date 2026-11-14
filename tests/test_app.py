@@ -79,19 +79,22 @@ def test_couple_retirement_ages_and_already_retired_options() -> None:
 def test_holiday_goal_is_included_in_projection() -> None:
     app = open_app()
     app.button(key="get_started").click().run()
+    app.number_input(key="input_age").set_value(54).run()
+    app.number_input(key="input_retirement_age").set_value(55).run()
     for _ in range(5):
         app.button(key="wizard_next").click().run()
     app.multiselect(key="input_lifestyle_categories").set_value(["Holiday"]).run()
     app.number_input(key="input_goal_holiday_amount").set_value(5_000).run()
-    app.number_input(key="input_goal_holiday_start_age").set_value(65).run()
-    app.number_input(key="input_goal_holiday_finish_age").set_value(66).run()
+    app.number_input(key="input_goal_holiday_start_age").set_value(56).run()
+    app.number_input(key="input_goal_holiday_finish_age").set_value(57).run()
     app.button(key="wizard_next").click().run()
     assert not app.exception
     _, projection, _ = app.session_state["calculation"]
     goal_costs = todays_dollars(projection).set_index("age").lifestyle_goal_costs
-    assert goal_costs.loc[65] == 5_000
-    assert goal_costs.loc[66] == 5_000
-    assert goal_costs.loc[67] == 0
+    assert goal_costs.loc[55] == 0
+    assert goal_costs.loc[56] == 5_000
+    assert goal_costs.loc[57] == 5_000
+    assert goal_costs.loc[58] == 0
 
 
 def test_investment_property_loan_inputs_flow_into_results() -> None:

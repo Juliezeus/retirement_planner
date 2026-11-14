@@ -124,6 +124,22 @@ def test_lifestyle_goals_add_costs_at_frequency_and_age_range() -> None:
     assert frame.lifestyle_goal_costs.tolist() == [0, 5_000, 17_000, 0]
 
 
+def test_lifestyle_goal_draft_dictionaries_are_normalized() -> None:
+    h = household(
+        retirement_age=60,
+        lifestyle_goals=({
+            "category": "Holiday",
+            "amount": 15_000,
+            "frequency": "Every year",
+            "start_age": 61,
+            "finish_age": 62,
+        },),
+    )
+    assert h.lifestyle_goals == (LifestyleGoal("Holiday", 15_000, "Every year", 61, 62),)
+    frame = project(h, assumptions(life_expectancy=62))
+    assert frame.lifestyle_goal_costs.tolist() == [0, 15_000, 15_000]
+
+
 def test_pension_starts_at_each_partners_age_67() -> None:
     frame = project(household(age=66, partner_age=65, retirement_age=66), assumptions(life_expectancy=67))
     assert frame.age_pension_income.tolist() == pytest.approx([0, 24_258, 48_516])
