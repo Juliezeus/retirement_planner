@@ -94,6 +94,20 @@ def test_holiday_goal_is_included_in_projection() -> None:
     assert goal_costs.loc[67] == 0
 
 
+def test_investment_property_loan_inputs_flow_into_results() -> None:
+    app = open_app()
+    app.button(key="get_started").click().run()
+    for _ in range(4):
+        app.button(key="wizard_next").click().run()
+    app.text_input(key="input_property_value").set_value("$800,000").run()
+    app.text_input(key="input_annual_rent").set_value("$36,000").run()
+    app.text_input(key="input_investment_loan_balance").set_value("$500,000").run()
+    app.number_input(key="input_investment_loan_rate").set_value(6.25).run()
+    assert app.session_state["draft"]["investment_loan_balance"] == 500_000
+    assert app.session_state["draft"]["investment_loan_rate"] == .0625
+    assert not app.exception
+
+
 def test_invalid_retirement_age_and_currency_block_next() -> None:
     app = open_app()
     app.button(key="get_started").click().run()

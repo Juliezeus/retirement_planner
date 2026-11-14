@@ -252,11 +252,19 @@ def assets(errors: list[str]) -> None:
         ("cash", "Cash and bank savings", "Combined bank balances available for spending. Do not include again under investments."),
         ("investments", "Shares, ETFs and managed funds", "Combined value outside super. An ETF is a fund traded on a stock exchange. Exclude cash and property."),
         ("property_value", "Investment property value", "Gross market value excluding the family home. Property is retained throughout retirement, not automatically sold."),
-        ("annual_rent", "Gross rent received, per year", f"Rent before expenses. The current {st.session_state.assumptions.rental_expense_share:.0%} expense allowance is deducted for a simplified net-rent estimate. Edit it in results."),
-        ("mortgage_balance", "Home mortgage remaining", "Debt secured on your family home. Investment-property borrowing is unsupported in this first model; do not enter it here."),
+        ("annual_rent", "Gross rent received, per year", f"Rent before expenses. The current {st.session_state.assumptions.rental_expense_share:.0%} allowance estimates other rental expenses; investment-loan interest is modeled separately."),
+        ("investment_loan_balance", "Investment property loan balance (interest-only)", "Outstanding debt secured against your investment property. The principal is assumed to remain unchanged throughout the projection; interest is paid annually."),
     ):
         money_input(field, label, tooltip, errors)
     d = st.session_state.draft
+    d["investment_loan_rate"] = st.number_input(
+        "Investment property loan interest rate (%)", 0.0, 100.0,
+        value=d["investment_loan_rate"] * 100, step=.1, format="%.2f",
+        key="input_investment_loan_rate",
+        help="Annual rate assumed constant. Interest is paid from household income/assets and deducted against modeled taxable income. Negative rental losses are not carried forward.",
+    ) / 100
+    money_input("mortgage_balance", "Home mortgage remaining",
+        "Debt secured on your family home; modeled separately as principal-and-interest repayments.", errors)
     d["mortgage_rate"] = st.number_input("Home mortgage interest rate (%)", 0.0, 100.0,
         value=d["mortgage_rate"] * 100, step=.1, format="%.2f", key="input_mortgage_rate",
         help="Annual rate assumed constant. The model calculates monthly principal-and-interest repayments.") / 100
@@ -269,6 +277,8 @@ def assets(errors: list[str]) -> None:
         errors.append("Enter at least one year remaining on your mortgage.")
     if d["mortgage_balance"] and not d["homeowner"]:
         errors.append("This model supports a mortgage on your own home only. Remove it or update homeownership.")
+    if d["investment_loan_balance"] and not d["property_value"]:
+        errors.append("Enter an investment property value if you have an investment property loan.")
 
 
 def retirement_goal(errors: list[str]) -> None:
@@ -579,7 +589,7 @@ def results() -> None:
     st.plotly_chart(wealth_chart(projection if future else real, h, future),
         width="stretch", config={"displayModeBar": False},
         alt="Stacked household assets by age, with retirement marked and net wealth after debts overlaid.")
-    st.caption("Year-end balances. Areas show assets; the dotted line deducts debts. Family home value is excluded. Retained investment property cannot directly fund a spending gap.")
+    st.caption("Year-end balances. Areas show assets; the dotted line deducts debts, including the interest-only investment property loan. Family home value is excluded. Retained investment property cannot directly fund a spending gap.")
     with st.expander("How to read this estimate"):
         st.markdown("Today's dollars remove price growth to show current buying power; future dollars include it. A funding gap does not necessarily mean every asset is exhausted. A later pension may restore coverage after a gap.")
         st.markdown("Couples use the editable income and super allocations above. Each person's salary and contributions stop at their own retirement age; the retirement spending goal starts when the first person retires. Both remain in the household through the younger partner's planning age. There is no death or survivor transition.")

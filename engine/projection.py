@@ -55,6 +55,8 @@ class Household:
     investments: float = 30_000
     property_value: float = 0
     annual_rent: float = 0
+    investment_loan_balance: float = 0
+    investment_loan_rate: float = .06
     mortgage_balance: float = 0
     mortgage_rate: float = .06
     mortgage_years: int = 20
@@ -161,6 +163,10 @@ def validate_scenario(h: Household, a: Assumptions) -> None:
             raise ValueError("Debt years must be whole numbers, positive for outstanding debt.")
     if h.annual_rent and not h.property_value:
         raise ValueError("Rental income requires an investment property value.")
+    if h.investment_loan_balance and not h.property_value:
+        raise ValueError("An investment-property loan requires an investment property value.")
+    if h.investment_loan_rate > 1:
+        raise ValueError("The investment-property loan rate must be at most 100%.")
     if h.salary_sacrifice > h.gross_salary:
         raise ValueError("Salary sacrifice cannot exceed gross salary.")
     net_super_rate = a.super_return * (1 - ACCUMULATION_EARNINGS_TAX_RATE) - a.super_fees
@@ -276,7 +282,8 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
 
     Investments use after-tax total returns, cash interest is taxed as income,
     rent grows with inflation less an editable expense allowance. Other income
-    continues in retirement. Mortgage is assumed secured on the exempt home.
+    continues in retirement. The home mortgage amortizes; investment-property
+    debt is interest-only with a constant principal balance.
     Property is never automatically sold. Tax brackets and other super caps stay
     fixed; concessional cap uses wage growth in $2,500 steps. Pension rates AND
     thresholds grow by pension_indexation. Both indexation paths are assumptions.
@@ -290,6 +297,7 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
     pension_started = [False] * len(super_shares)
     liquid = [h.cash, h.investments]
     mortgage, debt, property_value = h.mortgage_balance, h.other_debts, h.property_value
+    investment_loan = h.investment_loan_balance
     mortgage_payment = annual_loan_payment(mortgage, h.mortgage_rate, h.mortgage_years)
     debt_payment = annual_loan_payment(debt, a.other_debt_rate, a.other_debt_years)
     # Fund the younger partner to the same assumed longevity; no death transition.
@@ -311,6 +319,7 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         salary = sum(salaries)
         other_income = h.other_income * inflation
         rent = h.annual_rent * inflation * (1 - a.rental_expense_share)
+        investment_interest = investment_loan * h.investment_loan_rate
         for i, person_age in enumerate(ages):
             if retired_people[i] and person_age >= PRESERVATION_AGE and not pension_started[i]:
                 transfer = min(accumulation[i], TRANSFER_BALANCE_CAP)
@@ -321,7 +330,7 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         pension = estimate_age_pension(
             age=age, partner_age=ages[1] if couple else None, homeowner=h.homeowner,
             financial_assets=(sum(liquid) + assessable_super) / pension_factor,
-            non_financial_assets=property_value / pension_factor,
+            non_financial_assets=max(0.0, property_value - investment_loan) / pension_factor,
             other_assessable_annual_income=(salary + other_income + rent) / pension_factor,
         ).annual_pension * pension_factor
         minimum = [balance * minimum_drawdown_rate(person_age) if retired_people[i] else 0.0
@@ -353,6 +362,7 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         count = sum(eligible)
         taxable_incomes = [max(0.0,
             salaries[i] + (other_income + rent + cash_interest) * share - sacrifices[i]
+            - investment_interest * share
             + (pension / count if eligible[i] else 0.0))
             for i, share in enumerate(income_shares)]
         base_tax = sum(total_income_tax(income) for income in taxable_incomes)
@@ -373,7 +383,8 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
                 or (goal.frequency != "One-off" and goal.start_age <= age <= goal.finish_age)
             )
         ) * inflation
-        expenses = target + lifestyle_goal_costs + children_cost + mortgage_paid + debt_paid + after_tax
+        expenses = (target + lifestyle_goal_costs + children_cost + mortgage_paid
+                    + debt_paid + investment_interest + after_tax)
         net_income = salary + other_income + rent + cash_interest + pension - sacrifice - tax
         minimum_taken = sum(min(balance, amount) for balance, amount in zip(pensions, minimum))
         pensions = [max(0.0, balance - amount) for balance, amount in zip(pensions, minimum)]
@@ -401,7 +412,11 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         # Debt service has priority over living costs/contributions. If even the
         # debt service is unfunded, restore its unpaid amount to the loan rather
         # than inventing repayment. No further interest on arrears is modeled.
-        unpaid_debt = max(0.0, need - target - lifestyle_goal_costs - children_cost - after_tax)
+        unpaid_debt = max(
+            0.0,
+            need - target - lifestyle_goal_costs - children_cost
+            - after_tax - investment_interest,
+        )
         restored_other = min(debt_paid, unpaid_debt)
         debt += restored_other
         debt_paid -= restored_other
@@ -419,10 +434,11 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
             inflation_factor=inflation,
             super=super_balance, pension_super=sum(pensions), accumulation_super=sum(accumulation),
             investments=liquid[1], cash=liquid[0], property=property_value,
-            mortgage=mortgage, other_debts=debt,
-            net_worth=super_balance + sum(liquid) + property_value - mortgage - debt,
+            mortgage=mortgage, investment_loan=investment_loan, other_debts=debt,
+            net_worth=super_balance + sum(liquid) + property_value - mortgage - investment_loan - debt,
             salary_income=salary, other_income=other_income, rental_income=rent,
             cash_interest=cash_interest, age_pension_income=pension,
+            investment_property_interest=investment_interest,
             super_income=minimum_taken + super_taken, investment_income=liquid_taken,
             income_tax=tax, salary_sacrifice=sacrifice, after_tax_contributions=after_tax,
             super_contributions=sum(additions), rejected_contributions=rejected,
@@ -437,10 +453,11 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
     frame = pd.DataFrame(rows)
     frame.attrs["warnings"] = warnings
     frame.attrs["limitations"] = [
-        "Both partners retire together; no death or survivor transition.",
+        "No death or survivor transition.",
         "Combined income and super use editable allocation assumptions.",
         "Investment total return is after tax; no separate dividends or capital gains tax.",
-        "Net worth excludes the family home; investment property is not sold to fund gaps.",
+        "Net worth excludes the family home; investment property is not sold to fund gaps. Investment-property principal is modeled as interest-only and unchanged.",
+        "Investment-loan interest is deducted against household taxable income but rental losses are not carried forward.",
         "Concessional caps use wage growth in $2,500 steps; other caps and tax brackets stay fixed. Future indexation is an assumption.",
         "Tax offsets except the excess-contribution offset, Medicare reductions, Work Bonus and Division 293/296 are excluded.",
         "Excess employer contributions stay in super; release elections and their non-concessional-cap interaction are not modeled.",

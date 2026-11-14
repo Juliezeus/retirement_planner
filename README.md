@@ -211,14 +211,21 @@ grow with inflation. Child costs are ADDITIONAL to entered living spending; avoi
 including them twice. Cash interest is included in taxable income, not also added
 to the balance. Investment return is an AFTER-TAX total-return approximation;
 dividend yields, franking credits, realisations and capital gains tax are not
-modeled separately. Rent deducts an editable 20% expense allowance. Mortgage
-is assumed to be secured on the exempt home and does not reduce assessable
-investment property. Other debt uses editable 8% interest and five-year repayment
-defaults. Both loans amortise monthly; debt service is prioritized and unpaid
-repayments remain in the debt balance. No new borrowing or penalty interest on
-arrears is added. A shortfall indicates this cash-flow path cannot be funded.
+modeled separately. Rent deducts an editable 20% allowance for other rental
+expenses. Investment-property borrowing is modeled separately as an interest-only
+loan: enter its balance and annual rate; principal remains unchanged and interest
+is paid each year, deducted from rental taxable income (without carrying forward
+negative rental losses) and included in household expenses. The outstanding
+balance reduces modeled property equity and net worth. This is a simplified
+projection and does not model refinancing, rate changes, loan fees, or detailed
+rental tax deductions. The separate home mortgage is principal-and-interest.
+Other debt uses editable 8% interest and five-year repayment defaults. Home and
+other debts amortise monthly; debt service is prioritized and unpaid repayments
+remain in the debt balance. No new borrowing or penalty interest on arrears is
+added. A shortfall indicates this cash-flow path cannot be funded.
 
 Pension assessment uses opening assets, salary, net rent and other income.
+Investment property is assessed at estimated equity after its interest-only loan.
 Retirement pension balances are assessable; under-67 accumulation is exempt.
 Rates AND thresholds grow at the editable pension-indexation assumption (2.5%
 default), not a prediction of future government policy. The concessional cap

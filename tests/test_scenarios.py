@@ -14,6 +14,8 @@ def test_round_trip_preserves_couple_children_and_assumptions() -> None:
     h = replace(
         Household(), partner_age=42, partner_retirement_age=60,
         children_ages=(3, 12), cash=12_345.67,
+        property_value=800_000, annual_rent=36_000,
+        investment_loan_balance=500_000, investment_loan_rate=.0625,
         lifestyle_goals=(LifestyleGoal("Holiday", 5_000, "Every year", 65, 70),),
     )
     a = replace(DEFAULT_ASSUMPTIONS, primary_income_share=.7, inflation=.03)

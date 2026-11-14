@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from config import Assumptions
+from engine.tax import total_income_tax
 from engine.projection import (
     Household, LifestyleGoal, annual_loan_payment, minimum_drawdown_rate, money_lasts_until,
     project, sustainable_income, todays_dollars, indexed_concessional_cap,
@@ -187,6 +188,37 @@ def test_rent_cash_interest_and_tax_are_not_double_counted() -> None:
     assert row.rental_income == 16_000
     assert row.income_tax == 670
     assert row.cash + row.investments == 119_330
+
+
+def test_investment_property_loan_is_interest_only_and_included_in_cashflow() -> None:
+    h = household(
+        age=40, retirement_age=65, property_value=500_000, annual_rent=60_000,
+        investment_loan_balance=100_000, investment_loan_rate=.05,
+    )
+    row = project(h, assumptions(life_expectancy=65)).iloc[0]
+    assert row.investment_property_interest == 5_000
+    assert row.investment_loan == 100_000
+    assert row.rental_income == 48_000
+    assert row.income_tax == pytest.approx(total_income_tax(43_000))
+    assert row.total_expenses == 5_000
+    assert row.cash + row.investments == pytest.approx(
+        48_000 - total_income_tax(43_000) - 5_000
+    )
+    assert row.net_worth == pytest.approx(
+        row.cash + row.investments + row.property - 100_000
+    )
+
+    later = project(h, assumptions(life_expectancy=65)).iloc[-1]
+    assert later.investment_loan == 100_000
+    assert later.investment_property_interest == 5_000
+
+
+def test_investment_property_loan_requires_property_and_valid_rate() -> None:
+    with pytest.raises(ValueError, match="requires an investment property"):
+        project(household(investment_loan_balance=100_000), assumptions(life_expectancy=61))
+    with pytest.raises(ValueError, match="at most 100%"):
+        project(household(property_value=100_000, investment_loan_rate=1.01),
+                assumptions(life_expectancy=61))
 
 
 def test_solver_known_three_year_case_and_boundary() -> None:

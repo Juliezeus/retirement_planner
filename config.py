@@ -16,7 +16,7 @@ CONCESSIONAL_CAP = 32_500
 CONCESSIONAL_CAP_INDEX_STEP = 2_500
 # Wage growth is a modeling proxy for statutory AWOTE indexation, not a forecast.
 EXCESS_CONTRIBUTIONS_OFFSET_RATE = .15
-MODEL_REVISION = "0.3.0"
+MODEL_REVISION = "0.4.0"
 NON_CONCESSIONAL_CAP = 130_000
 TRANSFER_BALANCE_CAP = 2_100_000
 CONTRIBUTIONS_TAX_RATE = 0.15
@@ -102,7 +102,7 @@ SHORTFALL_TOLERANCE = .01
 DEFAULT_ASSUMPTIONS = Assumptions()
 ASFA_QUARTER = "June 2026"
 ASFA_SOURCE = "https://www.superannuation.asn.au/media-release/asfa-retirement-standard-retirees-living-costs-rising-faster-than-inflation-as-power-healthcare-insurance-bills-climb/"
-SCENARIO_SCHEMA_VERSION = 2
+SCENARIO_SCHEMA_VERSION = 3
 SCENARIO_MAX_BYTES = 100_000
 MAX_CHILDREN = 10
 MAX_INPUT_MONEY = 1_000_000_000.0
