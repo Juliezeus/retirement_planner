@@ -5,7 +5,7 @@ import json
 
 from config import (Assumptions, FINANCIAL_YEAR, MAX_CHILDREN, MAX_INPUT_MONEY,
                     SCENARIO_MAX_BYTES, SCENARIO_SCHEMA_VERSION)
-from engine.projection import Household, validate_scenario
+from engine.projection import Household, LifestyleGoal, validate_scenario
 
 
 def validate_inputs(h: Household, a: Assumptions) -> None:
@@ -13,14 +13,18 @@ def validate_inputs(h: Household, a: Assumptions) -> None:
     validate_scenario(h, a)
     if not 18 <= h.age <= 119 or (h.partner_age is not None and not 18 <= h.partner_age <= 119):
         raise ValueError("Adult ages must be between 18 and 119.")
-    if h.retirement_age <= h.age:
-        raise ValueError("Choose a retirement age older than your current age.")
+    if h.partner_age is not None and h.partner_retirement_age <= 0:
+        raise ValueError("Enter a valid partner retirement age.")
     if len(h.children_ages) > MAX_CHILDREN:
         raise ValueError(f"Enter at most {MAX_CHILDREN} children.")
     for field in fields(h):
         value = getattr(h, field.name)
-        if field.name not in {"children_ages", "homeowner", "partner_age"} and value > MAX_INPUT_MONEY:
+        if field.name not in {"children_ages", "lifestyle_goals", "homeowner",
+                              "partner_age", "partner_retirement_age",
+                              "already_retired", "partner_already_retired"} and value > MAX_INPUT_MONEY:
             raise ValueError("Amounts exceed the supported input limit.")
+    if any(goal.amount > MAX_INPUT_MONEY for goal in h.lifestyle_goals):
+        raise ValueError("Lifestyle goal amounts exceed the supported input limit.")
     if h.mortgage_rate > 1 or h.mortgage_years > 100 or a.other_debt_years > 100:
         raise ValueError("Debt rates must be at most 100% and terms at most 100 years.")
     if h.mortgage_balance and not h.homeowner:
@@ -72,6 +76,12 @@ def load_scenario(data: bytes) -> tuple[Household, Assumptions]:
         if not isinstance(p["household"]["children_ages"], list):
             raise ValueError("Child ages must be a list.")
         p["household"]["children_ages"] = tuple(p["household"]["children_ages"])
+        if not isinstance(p["household"]["lifestyle_goals"], list):
+            raise ValueError("Lifestyle goals must be a list.")
+        p["household"]["lifestyle_goals"] = tuple(
+            LifestyleGoal(**goal) if isinstance(goal, dict) else goal
+            for goal in p["household"]["lifestyle_goals"]
+        )
         h, a = Household(**p["household"]), Assumptions(**p["assumptions"])
         validate_inputs(h, a)
         return h, a

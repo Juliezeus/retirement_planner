@@ -6,7 +6,7 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
 from config import ASFA_ANNUAL_SPENDING, DEFAULT_ASSUMPTIONS
-from engine.projection import Household
+from engine.projection import Household, todays_dollars
 
 APP = Path(__file__).resolve().parents[1] / "app.py"
 
@@ -28,6 +28,7 @@ def finish_wizard(app: AppTest) -> AppTest:
 def test_complete_single_flow_and_display_toggle_preserves_headline() -> None:
     app = finish_wizard(open_app())
     assert app.title[0].value == "Your retirement picture"
+    assert app.download_button(key="results_csv").label == "Download results as CSV"
     assert app.success
     assert any("licensed financial adviser" in x.value for x in app.info)
     headline = next(x.value for x in app.subheader if "You can afford" in x.value)
@@ -60,6 +61,37 @@ def test_couple_children_back_navigation_and_budget_pick() -> None:
     app.button(key="goal_modest").click().run()
     assert app.session_state["draft"]["retirement_income"] == ASFA_ANNUAL_SPENDING["couple"]["modest"]
     assert not app.exception
+
+
+def test_couple_retirement_ages_and_already_retired_options() -> None:
+    app = open_app()
+    app.button(key="get_started").click().run()
+    app.radio(key="input_household_type").set_value("Me and my partner").run()
+    app.checkbox(key="input_already_retired").set_value(True).run()
+    app.checkbox(key="input_partner_already_retired").set_value(True).run()
+    assert app.session_state["draft"]["already_retired"]
+    assert app.session_state["draft"]["partner_already_retired"]
+    assert app.session_state["draft"]["retirement_age"] == app.session_state["draft"]["age"]
+    assert app.session_state["draft"]["partner_retirement_age"] == app.session_state["draft"]["partner_age"]
+    assert not app.exception
+
+
+def test_holiday_goal_is_included_in_projection() -> None:
+    app = open_app()
+    app.button(key="get_started").click().run()
+    for _ in range(5):
+        app.button(key="wizard_next").click().run()
+    app.multiselect(key="input_lifestyle_categories").set_value(["Holiday"]).run()
+    app.number_input(key="input_goal_holiday_amount").set_value(5_000).run()
+    app.number_input(key="input_goal_holiday_start_age").set_value(65).run()
+    app.number_input(key="input_goal_holiday_finish_age").set_value(66).run()
+    app.button(key="wizard_next").click().run()
+    assert not app.exception
+    _, projection, _ = app.session_state["calculation"]
+    goal_costs = todays_dollars(projection).set_index("age").lifestyle_goal_costs
+    assert goal_costs.loc[65] == 5_000
+    assert goal_costs.loc[66] == 5_000
+    assert goal_costs.loc[67] == 0
 
 
 def test_invalid_retirement_age_and_currency_block_next() -> None:

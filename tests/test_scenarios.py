@@ -6,12 +6,16 @@ import json
 import pytest
 
 from config import DEFAULT_ASSUMPTIONS, SCENARIO_MAX_BYTES
-from engine.projection import Household
+from engine.projection import Household, LifestyleGoal
 from scenarios import dump_scenario, load_scenario
 
 
 def test_round_trip_preserves_couple_children_and_assumptions() -> None:
-    h = replace(Household(), partner_age=42, children_ages=(3, 12), cash=12_345.67)
+    h = replace(
+        Household(), partner_age=42, partner_retirement_age=60,
+        children_ages=(3, 12), cash=12_345.67,
+        lifestyle_goals=(LifestyleGoal("Holiday", 5_000, "Every year", 65, 70),),
+    )
     a = replace(DEFAULT_ASSUMPTIONS, primary_income_share=.7, inflation=.03)
     assert load_scenario(dump_scenario(h, a)) == (h, a)
 
@@ -30,6 +34,7 @@ def test_malformed_files(data) -> None:
     ("household", "cash", -1), ("household", "cash", float("nan")),
     ("household", "children_ages", "3, 5"), ("household", "children_ages", [True]),
     ("household", "retirement_age", 40), ("household", "partner_age", 120),
+    ("household", "already_retired", "yes"),
     ("household", "age", 120), ("assumptions", "primary_super_share", 1.2),
     ("assumptions", "life_expectancy", "ninety"),
 ])

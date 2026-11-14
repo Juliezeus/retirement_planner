@@ -16,10 +16,18 @@ from config import (
     ACCUMULATION_EARNINGS_TAX_RATE, RETIREMENT_EARNINGS_TAX_RATE,
     MEDICARE_LEVY_RATE, PENSION_ASSET_TAPER_PER_DOLLAR, PENSION_INCOME_TAPER,
 )
-from engine.projection import Household, project, sustainable_income, money_lasts_until, todays_dollars
+from engine.projection import (
+    Household, LifestyleGoal, project, sustainable_income, money_lasts_until,
+    todays_dollars,
+)
 from scenarios import dump_scenario, load_scenario, validate_inputs
 
 STEPS = ("About you", "Family", "Income", "Super", "Assets and debts", "Retirement goal")
+LIFESTYLE_CATEGORIES = (
+    "Hobby", "Gifts", "Holiday", "Debt", "New car", "Renovations",
+    "Healthcare", "Aged care", "Other",
+)
+LIFESTYLE_FREQUENCIES = ("One-off", "Every month", "Every quarter", "Every year")
 RATE_FIELDS = {
     "inflation": ("Cost-of-living growth", "Annual price growth. Today's dollars remove this growth to show current buying power."),
     "wage_growth": ("Salary growth", "Annual salary increases before retirement."),
@@ -56,6 +64,10 @@ def initialize() -> None:
 def current_household() -> Household:
     values = dict(st.session_state.draft)
     values["children_ages"] = tuple(values["children_ages"])
+    values["lifestyle_goals"] = tuple(
+        goal if isinstance(goal, LifestyleGoal) else LifestyleGoal(**goal)
+        for goal in values.get("lifestyle_goals", ())
+    )
     return Household(**values)
 
 
@@ -134,7 +146,7 @@ def landing() -> None:
     st.title("Plan your retirement with more confidence")
     st.markdown("Explore what your household could spend in retirement, how long your money may cover your costs, and the assumptions behind the estimate.")
     with st.container(border=True):
-        st.markdown("**About 5 minutes · Six guided steps**")
+        st.markdown("**About 5 minutes · Three clear stages**")
         st.markdown("Have rough figures for your income, super, savings and debts handy. Estimates are fine to get started. Couples enter combined amounts.")
         st.info(DISCLAIMER)
         if st.button("Get started", type="primary", key="get_started"):
@@ -156,13 +168,39 @@ def about_you(errors: list[str]) -> None:
                 d["retirement_income"] = float(ASFA_ANNUAL_SPENDING[new_kind][level])
                 st.session_state.pop("input_retirement_income", None)
                 break
-        d["partner_age"] = 45 if couple else None
+        d["partner_age"] = d["age"] if couple else None
+        d["partner_retirement_age"] = d["retirement_age"] if couple else None
+        d["partner_already_retired"] = False
         st.session_state.pop("input_partner_age", None)
+        st.session_state.pop("input_partner_retirement_age", None)
+        st.session_state.pop("input_partner_already_retired", None)
     integer_input("age", "Your age", "Age now in whole years. No date of birth is collected.", 18, 119)
+    d["already_retired"] = st.checkbox(
+        "I'm already retired", value=d["already_retired"], key="input_already_retired",
+        help="Retirement income and spending assumptions apply from now; salary and contributions stop.",
+    )
+    if d["already_retired"]:
+        d["retirement_age"] = d["age"]
+        st.caption("Your retirement age is set to your current age.")
+    else:
+        integer_input("retirement_age", "Your target retirement age",
+            "When your salary and super contributions stop. Early retirement needs savings outside super until access is available.",
+            19, 120)
     if couple:
         integer_input("partner_age", "Your partner's age", "Age now. Super and Age Pension access depend on each person's age.", 18, 119)
-        st.caption("Both partners stop work when you reach the retirement age below. Income and starting super are split 50/50 by default; edit the splits in results.")
-    integer_input("retirement_age", "Your target retirement age", "When household salary stops. Must be older than your age now. Early retirement needs savings outside super until access is available.", 19, 120)
+        d["partner_already_retired"] = st.checkbox(
+            "My partner is already retired", value=d["partner_already_retired"],
+            key="input_partner_already_retired",
+            help="Their salary and super contributions stop from now.",
+        )
+        if d["partner_already_retired"]:
+            d["partner_retirement_age"] = d["partner_age"]
+            st.caption("Your partner's retirement age is set to their current age.")
+        else:
+            integer_input("partner_retirement_age", "Your partner's target retirement age",
+                "When your partner's salary and super contributions stop.",
+                19, 120)
+        st.caption("Combined income and starting super are split between you by default; edit the splits in results.")
     d["homeowner"] = st.radio("Do you own the home you live in?", ["Yes", "No"],
         index=0 if d["homeowner"] else 1, key="input_homeowner",
         help="The family home is excluded from pension assets. Non-homeowners have different limits.") == "Yes"
@@ -170,10 +208,17 @@ def about_you(errors: list[str]) -> None:
     longevity = st.number_input("Plan until age", 18, 120, value=a.life_expectancy, step=1,
         key="input_planning_age", help="A planning horizon, not a lifespan prediction. Couples are funded until the younger partner reaches it.")
     st.session_state.assumptions = replace(a, life_expectancy=longevity)
-    if d["retirement_age"] <= d["age"]:
+    if not d["already_retired"] and d["retirement_age"] <= d["age"]:
         errors.append("Choose a retirement age older than your current age.")
-    if max(d["age"], d["partner_age"] or 0, d["retirement_age"]) > longevity:
-        errors.append("Choose a planning age at least as high as both current ages and your retirement age.")
+    if couple and not d["partner_already_retired"] and d["partner_retirement_age"] <= d["partner_age"]:
+        errors.append("Choose a retirement age older than your partner's current age.")
+    latest_retirement_age = max(
+        d["age"], d["partner_age"] or 0,
+        d["retirement_age"] if not d["already_retired"] else 0,
+        d["partner_retirement_age"] if couple and not d["partner_already_retired"] else 0,
+    )
+    if latest_retirement_age > longevity:
+        errors.append("Choose a planning age at least as high as both current ages and retirement ages.")
 
 
 def family(errors: list[str]) -> None:
@@ -227,6 +272,7 @@ def assets(errors: list[str]) -> None:
 
 
 def retirement_goal(errors: list[str]) -> None:
+    d = st.session_state.draft
     money_input("annual_spending", "Current living spending, per year", "After-tax living costs, excluding child costs, loan repayments and extra super contributions; these are added separately. Include rent if you rent your home.", errors)
     kind = "couple" if st.session_state.draft["partner_age"] is not None else "single"
     budgets = ASFA_ANNUAL_SPENDING[kind]
@@ -240,12 +286,98 @@ def retirement_goal(errors: list[str]) -> None:
     money_input("retirement_income", "Retirement living income goal, per year", "Annual after-tax household living budget in today's buying power. Child costs and debt repayments are added on top. $0 means no living budget.", errors)
     st.caption(f"ASFA {ASFA_QUARTER} budgets are for homeowners aged 65–84. Renters may need more for housing. Modest is a basic lifestyle; Comfortable allows more discretionary spending.")
     st.markdown(f"[About the ASFA budget figures]({ASFA_SOURCE})")
+    st.subheader("Add lifestyle goals")
+    st.markdown("Add expenses above your regular retirement income. Choose a goal to enter its amount, frequency and age range. Ages refer to your age; costs are counted during retirement only and use today's dollars.")
+    existing = {}
+    for goal in st.session_state.draft.get("lifestyle_goals", ()):
+        details = asdict(goal) if isinstance(goal, LifestyleGoal) else goal
+        existing[details["category"]] = details
+    categories = st.multiselect(
+        "Lifestyle goals",
+        LIFESTYLE_CATEGORIES,
+        default=[category for category in LIFESTYLE_CATEGORIES if category in existing],
+        key="input_lifestyle_categories",
+        help="Select any that apply. You can add one-off or recurring costs for each goal.",
+    )
+    updated_goals = []
+    if d["already_retired"] or d["partner_already_retired"]:
+        first_retirement_age = d["age"]
+    else:
+        primary_retirement_age = d["retirement_age"]
+        partner_retirement_as_primary_age = (
+            d["age"] + d["partner_retirement_age"] - d["partner_age"]
+            if d["partner_age"] is not None else primary_retirement_age
+        )
+        first_retirement_age = min(primary_retirement_age, partner_retirement_as_primary_age)
+    default_start = max(18, min(120, first_retirement_age))
+    for category in categories:
+        old = existing.get(category, {})
+        key = category.lower().replace(" ", "_")
+        with st.container(border=True):
+            st.markdown(f"**{category}**")
+            details = st.columns(2)
+            amount = details[0].number_input(
+                "Amount each time (today's dollars)", 0.0, MAX_INPUT_MONEY,
+                value=float(old.get("amount", 0)), step=1_000.0,
+                key=f"input_goal_{key}_amount",
+            )
+            frequency = details[1].selectbox(
+                "Frequency", LIFESTYLE_FREQUENCIES,
+                index=LIFESTYLE_FREQUENCIES.index(old.get("frequency", "Every year")),
+                key=f"input_goal_{key}_frequency",
+            )
+            ages = st.columns(2)
+            start_age = ages[0].number_input(
+                "Start age", int(first_retirement_age), 120,
+                value=max(int(first_retirement_age), int(old.get("start_age", default_start))),
+                step=1, key=f"input_goal_{key}_start_age",
+            )
+            finish_default = max(start_age, min(120, old.get(
+                "finish_age", st.session_state.assumptions.life_expectancy)))
+            finish_age = ages[1].number_input(
+                "Finish age", int(start_age), 120, value=int(finish_default),
+                step=1, key=f"input_goal_{key}_finish_age",
+                disabled=frequency == "One-off",
+                help="A one-off goal is counted at its start age only.",
+            )
+            updated_goals.append(asdict(LifestyleGoal(
+                category, amount, frequency, start_age,
+                start_age if frequency == "One-off" else finish_age,
+            )))
+    st.session_state.draft["lifestyle_goals"] = tuple(updated_goals)
+
+
+def workflow_tabs(active: int) -> None:
+    """Render the three-stage navigation shown in the planning flow."""
+    labels = (
+        "1  Where you're at now",
+        "2  How much you'll need",
+        "3  Review your options",
+    )
+    with st.container(horizontal=True):
+        for index, label in enumerate(labels):
+            if st.button(
+                label,
+                type="primary" if active == index else "secondary",
+                disabled=index == 2 and st.session_state.screen != "results",
+                key=f"workflow_tab_{index}",
+            ):
+                if index == 0:
+                    st.session_state.screen, st.session_state.step = "wizard", 0
+                elif index == 1:
+                    st.session_state.screen, st.session_state.step = "wizard", 5
+                st.rerun()
 
 
 def wizard() -> None:
     step = st.session_state.step
-    st.title("Your household, step by step")
-    st.progress((step + 1) / len(STEPS), text=f"Step {step + 1} of {len(STEPS)} · {STEPS[step]}")
+    if st.session_state.screen == "results":
+        results()
+        return
+    active_tab = 1 if step == 5 else 0
+    workflow_tabs(active_tab)
+    if step < 5:
+        st.caption(f"Where you're at now · Section {step + 1} of 5")
     st.subheader(STEPS[step])
     errors: list[str] = []
     with st.container(border=True):
@@ -267,14 +399,12 @@ def wizard() -> None:
                 try:
                     h = current_household()
                     validate_inputs(h, st.session_state.assumptions)
-                    if h.retirement_age <= h.age:
-                        raise ValueError("Choose a retirement age older than your current age.")
                     st.session_state.screen = "results"
                 except ValueError as exc:
                     st.error(str(exc))
                     return
             st.rerun()
-    st.caption("Go back to change any answer. For couples, all dollar figures are combined.")
+    st.caption("Go back to change any answer. Couples enter combined dollar figures; each person has an individual retirement age.")
 
 
 def assumptions_panel(h: Household) -> None:
@@ -328,7 +458,7 @@ def statutory_assumptions() -> None:
     st.caption("Today's dollars use the price-growth assumption across the entire projection. This prototype retains the requested 2.5% default, which differs from ASIC's prescribed default accumulation-phase conversion. It has not been assessed for regulatory compliance.")
 
 
-def wealth_chart(frame, retirement_age: int, future: bool) -> go.Figure:
+def wealth_chart(frame, h: Household, future: bool) -> go.Figure:
     """Stack assets and overlay wealth after debts."""
     figure = go.Figure()
     for field, name, color in (("super", "Super", "#24756B"),
@@ -340,8 +470,18 @@ def wealth_chart(frame, retirement_age: int, future: bool) -> go.Figure:
     figure.add_trace(go.Scatter(x=frame.age, y=frame.net_worth, name="Net wealth after debts",
         mode="lines", line=dict(color="#273B47", width=2, dash="dot"),
         hovertemplate="Age %{x}<br>Net wealth: $%{y:,.0f}<extra></extra>"))
-    figure.add_vline(x=retirement_age, line_dash="dash", line_color="#536C66",
-                    annotation_text="Retirement", annotation_position="top left")
+    retirement_markers = [(
+        "Your retirement",
+        h.age if h.already_retired else h.retirement_age,
+    )]
+    if h.partner_age is not None:
+        partner_year = 0 if h.partner_already_retired else h.partner_retirement_age - h.partner_age
+        retirement_markers.append((
+            "Partner retirement", h.age + partner_year,
+        ))
+    for label, marker_age in retirement_markers:
+        figure.add_vline(x=marker_age, line_dash="dash", line_color="#536C66",
+                        annotation_text=label, annotation_position="top left")
     figure.update_layout(height=420, margin=dict(l=10, r=10, t=35, b=10),
         xaxis_title="Your age", yaxis_title="Future dollars" if future else "Today's dollars",
         yaxis_tickprefix="$", yaxis_tickformat=",.0f", hovermode="x unified",
@@ -351,6 +491,7 @@ def wealth_chart(frame, retirement_age: int, future: bool) -> go.Figure:
 
 
 def results() -> None:
+    workflow_tabs(2)
     st.title("Your retirement picture")
     st.caption("A household estimate in today's buying power. Changing the assumptions can change the result.")
     if st.button("Edit my answers", key="edit_answers"):
@@ -373,6 +514,26 @@ def results() -> None:
         st.info(DISCLAIMER)
         return
     real, first_gap = todays_dollars(projection), money_lasts_until(projection)
+    st.download_button(
+        "Download results as CSV",
+        data=real.to_csv(index=False).encode("utf-8-sig"),
+        file_name="retirement-projection-todays-dollars.csv",
+        mime="text/csv",
+        on_click="ignore",
+        key="results_csv",
+        help="Download the year-by-year projection with balances, income, expenses and any shortfalls in today's dollars.",
+    )
+    if h.lifestyle_goals:
+        st.subheader("Lifestyle goals included")
+        for goal in h.lifestyle_goals:
+            if goal.frequency == "One-off":
+                description = f"{currency(goal.amount)} once at age {goal.start_age}"
+            else:
+                description = (
+                    f"{currency(goal.amount)} {goal.frequency.lower()} "
+                    f"from age {goal.start_age} to {goal.finish_age}"
+                )
+            st.markdown(f"**{goal.category}:** {description}")
     pre_gaps = projection[(~projection.retired) & (projection.shortfall > .01)]
     if not sustainable.feasible:
         st.error("🔴 Gap — the plan cannot cover all costs, even with no retirement living budget.")
@@ -415,13 +576,13 @@ def results() -> None:
     st.subheader("Your assets over time")
     future = st.toggle("Show future dollars", value=False, key="future_dollars",
         help="Off: today's buying power. On: modeled future amounts including price growth. The headline always stays in today's dollars.")
-    st.plotly_chart(wealth_chart(projection if future else real, h.retirement_age, future),
+    st.plotly_chart(wealth_chart(projection if future else real, h, future),
         width="stretch", config={"displayModeBar": False},
         alt="Stacked household assets by age, with retirement marked and net wealth after debts overlaid.")
     st.caption("Year-end balances. Areas show assets; the dotted line deducts debts. Family home value is excluded. Retained investment property cannot directly fund a spending gap.")
     with st.expander("How to read this estimate"):
         st.markdown("Today's dollars remove price growth to show current buying power; future dollars include it. A funding gap does not necessarily mean every asset is exhausted. A later pension may restore coverage after a gap.")
-        st.markdown("Couples use the editable income and super allocations above. Both retire together and stay a couple throughout. There is no death or survivor transition. The younger partner's planning age sets the horizon.")
+        st.markdown("Couples use the editable income and super allocations above. Each person's salary and contributions stop at their own retirement age; the retirement spending goal starts when the first person retires. Both remain in the household through the younger partner's planning age. There is no death or survivor transition.")
         st.markdown("Returns are steady assumptions, not forecasts. Shares use an after-tax total return; franking credits and separate capital gains tax are excluded. Super withdrawals assume a taxed fund and eligible retirement access.")
         st.markdown("Age Pension residence and claim eligibility are assumed. Work Bonus, Rent Assistance, overseas rules, gifting and special income streams are excluded. Tax offsets except the excess-contribution offset, Medicare low-income adjustments, HELP and extra high-income/high-balance super taxes are excluded. Future tax brackets and super caps stay at the 2026–27 snapshot.")
         st.markdown("Child costs, debt repayments and extra contributions are added on top of living spending. The solver requires every year to be funded and does not preserve an inheritance target. The model never automatically sells property or borrows to fund gaps.")
@@ -433,6 +594,9 @@ initialize()
 notice = st.session_state.pop("notice", None)
 if notice:
     st.success(notice)
-{"landing": landing, "wizard": wizard, "results": results}[st.session_state.screen]()
+if st.session_state.screen == "landing":
+    landing()
+else:
+    wizard()
 # After main input rendering, so downloads contain the latest valid answers.
 scenario_tools()

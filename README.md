@@ -5,7 +5,7 @@ not a claim of compliance with ASIC requirements or a guaranteed income estimate
 
 ## Files
 
-- `app.py`: landing page, six-step wizard, results dashboard, editable assumptions
+- `app.py`: landing page, three-stage guided wizard, results dashboard, editable assumptions
   and session-only calculations. It calls the engines; no financial maths is
   implemented in the UI.
 - `config.py`: all requested rates and editable assumption defaults. Tax brackets
@@ -17,8 +17,9 @@ not a claim of compliance with ASIC requirements or a guaranteed income estimate
   take-home income and standard contributions tax. No Streamlit dependency.
 - `engine/age_pension.py`: deeming, assets/income tests and an explainable annual
   household estimate, including couples with only one person aged 67 or older.
-- `engine/projection.py`: annual household projection, debt repayments, retirement
-  withdrawals, today's-dollar conversion and sustainable-income binary search.
+- `engine/projection.py`: annual household projection with individual retirement
+  dates, lifestyle-goal costs, debt repayments, retirement withdrawals,
+  today's-dollar conversion and sustainable-income binary search.
 - `insights.py`: reserved for Phase 3.
 - `scenarios.py`: explicit versioned JSON schema, download encoding, upload
   validation and app input limits. It never reads or writes server files.
@@ -61,14 +62,21 @@ are not modeled. There is no persistent server scenario storage.
 
 ## Using the app
 
-1. Choose **Get started** and follow the six screens. Every field includes a help
-   tooltip; dollar inputs accept `$50,000`, `50000` or amounts with cents.
-2. Use **Back** to review earlier answers. The retirement age must be older than
-   your current age. Use **Plan until age** to change the household horizon.
-3. On the final screen choose an ASFA budget or enter your own living budget.
+1. Choose **Get started** and follow the three stages: **Where you're at now**,
+   **How much you'll need**, and **Review your options**. The first stage contains
+   the original guided sections for household, family, income, super, and assets.
+2. Set a separate retirement age for each partner, or mark either person as
+   already retired. Each person's salary and contributions stop at their own age;
+   the retirement spending goal starts when the first person retires. Use
+   **Plan until age** to change the household horizon.
+3. In **How much you'll need**, choose an ASFA budget or enter your own living
+   budget, then select optional lifestyle goals. Each goal supports an amount,
+   one-off/monthly/quarterly/yearly frequency, and start/finish ages. Goal costs
+   are added above the regular retirement income and are modeled in today's dollars.
    ASFA budgets are for homeowners aged 65–84; renters may need extra housing costs.
-4. Select **See my results**. The headline always uses today's dollars. The chart
-   toggle changes only chart values to future dollars; its dotted line deducts debt.
+4. Select **See my results**. The headline always uses today's dollars. Use
+   **Download results as CSV** to save the annual projection. The chart toggle
+   changes only chart values to future dollars; its dotted line deducts debt.
 5. Open **Assumptions used**, make changes and select **Apply assumptions**.
    Invalid edits are rejected while the previously applied assumptions remain.
 6. Use **Edit my answers** to revisit the wizard. **Clear session and start again**

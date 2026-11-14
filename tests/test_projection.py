@@ -7,7 +7,7 @@ import pytest
 
 from config import Assumptions
 from engine.projection import (
-    Household, annual_loan_payment, minimum_drawdown_rate, money_lasts_until,
+    Household, LifestyleGoal, annual_loan_payment, minimum_drawdown_rate, money_lasts_until,
     project, sustainable_income, todays_dollars, indexed_concessional_cap,
 )
 
@@ -57,7 +57,7 @@ def test_children_stop_at_eighteen() -> None:
 def test_locked_super_cannot_fund_early_retirement() -> None:
     h = household(age=58, retirement_age=58, super_balance=100_000,
                   investments=10_000, retirement_income=15_000)
-    frame = project(h, assumptions(life_expectancy=60))
+    frame = project(h, assumptions(life_expectancy=62))
     assert frame.iloc[0].super == 100_000
     assert frame.iloc[0].investment_income == 10_000
     assert frame.iloc[0].shortfall == 5_000
@@ -83,6 +83,44 @@ def test_mixed_age_super_and_longevity() -> None:
     assert frame.iloc[0].accumulation_super == 100_000
     assert frame.iloc[-1].partner_age == 61
     assert frame.iloc[-1].age == 63
+
+
+def test_partners_retire_individually_and_access_super_at_their_own_dates() -> None:
+    h = household(
+        partner_age=58, retirement_age=62, partner_retirement_age=59,
+        gross_salary=100_000, super_balance=200_000, retirement_income=10_000,
+    )
+    frame = project(h, assumptions(life_expectancy=62))
+    assert frame.salary_income.tolist()[:4] == [100_000, 50_000, 0, 0]
+    assert frame.retired.tolist()[:4] == [False, True, True, True]
+    assert frame.partner_retired.tolist()[:4] == [False, True, True, True]
+    assert frame.iloc[1].pension_super == 0
+    assert frame.iloc[2].pension_super > 0
+
+
+def test_already_retired_stops_only_that_person_salary() -> None:
+    h = household(
+        partner_age=58, already_retired=True, retirement_age=60,
+        partner_retirement_age=62, gross_salary=100_000,
+    )
+    frame = project(h, assumptions(life_expectancy=62))
+    assert frame.iloc[0].salary_income == 50_000
+    assert frame.iloc[0].retired
+    assert frame.iloc[0].primary_retired
+    assert not frame.iloc[0].partner_retired
+
+
+def test_lifestyle_goals_add_costs_at_frequency_and_age_range() -> None:
+    h = household(
+        retirement_age=60,
+        retirement_income=10_000,
+        lifestyle_goals=(
+            LifestyleGoal("Holiday", 5_000, "Every year", 61, 62),
+            LifestyleGoal("New car", 12_000, "One-off", 62, 62),
+        ),
+    )
+    frame = project(h, assumptions(life_expectancy=63))
+    assert frame.lifestyle_goal_costs.tolist() == [0, 5_000, 17_000, 0]
 
 
 def test_pension_starts_at_each_partners_age_67() -> None:

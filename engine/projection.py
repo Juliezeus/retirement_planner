@@ -1,6 +1,5 @@
 """Deterministic annual household model with no Streamlit or persistence.
 
-Both partners stop salary income when the primary person reaches retirement_age.
 Combined super/income use editable allocations, not an inferred legal ownership.
 Year rows describe a FULL year starting at the displayed age; balances are year
 end. Pension is assessed on opening assets, then returns and annual cash flows
@@ -24,14 +23,29 @@ from engine.tax import contributions_tax, income_tax_with_excess, total_income_t
 
 
 @dataclass(frozen=True)
+class LifestyleGoal:
+    """An additional retirement expense expressed in today's dollars."""
+
+    category: str
+    amount: float
+    frequency: str
+    start_age: int
+    finish_age: int
+
+
+@dataclass(frozen=True)
 class Household:
     """Non-identifying household inputs; money is combined annual nominal AUD."""
 
     age: int = 45
     partner_age: int | None = None
     retirement_age: int = 65
+    partner_retirement_age: int | None = None
+    already_retired: bool = False
+    partner_already_retired: bool = False
     homeowner: bool = True
     children_ages: tuple[int, ...] = ()
+    lifestyle_goals: tuple[LifestyleGoal, ...] = ()
     gross_salary: float = 100_000
     other_income: float = 0
     super_balance: float = 250_000
@@ -48,6 +62,13 @@ class Household:
     annual_spending: float = 50_000
     retirement_income: float = 56_166
 
+    def __post_init__(self) -> None:
+        if self.partner_age is not None and self.partner_retirement_age is None:
+            object.__setattr__(
+                self, "partner_retirement_age",
+                self.partner_age + self.retirement_age - self.age,
+            )
+
 
 def _number(value: float, name: str, minimum: float = 0) -> None:
     """Validate finite numeric values without accepting booleans as money."""
@@ -62,21 +83,69 @@ def validate_scenario(h: Household, a: Assumptions) -> None:
         _number(value, name)
         if not isinstance(value, int):
             raise ValueError(f"{name} must be a whole number.")
+    if not isinstance(h.already_retired, bool) or not isinstance(h.partner_already_retired, bool):
+        raise ValueError("Already-retired selections must be True or False.")
     if h.partner_age is not None:
         _number(h.partner_age, "partner_age")
         if not isinstance(h.partner_age, int):
             raise ValueError("partner_age must be a whole number.")
+        if h.partner_retirement_age is None:
+            raise ValueError("Enter your partner's retirement age.")
+        _number(h.partner_retirement_age, "partner_retirement_age")
+        if not isinstance(h.partner_retirement_age, int):
+            raise ValueError("partner_retirement_age must be a whole number.")
+        if not 18 <= h.partner_retirement_age <= 120:
+            raise ValueError("Partner retirement age must be between 18 and 120.")
+    elif h.partner_retirement_age is not None or h.partner_already_retired:
+        raise ValueError("Partner retirement details require a partner.")
+    if not isinstance(h.lifestyle_goals, tuple):
+        raise ValueError("Lifestyle goals must be a list.")
     if not isinstance(h.homeowner, bool):
         raise ValueError("homeowner must be True or False.")
-    if h.retirement_age < h.age or h.retirement_age > a.life_expectancy:
-        raise ValueError("Retirement age must be between current age and life expectancy.")
+    if not 18 <= h.retirement_age <= 120:
+        raise ValueError("Retirement age must be between 18 and 120.")
+    if not h.already_retired and not h.age <= h.retirement_age <= a.life_expectancy:
+        raise ValueError("Your retirement age must be at least your current age and no later than the planning age.")
+    if h.partner_age is not None and not h.partner_already_retired and not h.partner_age <= h.partner_retirement_age <= a.life_expectancy:
+        raise ValueError("Your partner's retirement age must be at least their current age and no later than the planning age.")
     for field in fields(h):
-        if field.name not in {"age", "partner_age", "retirement_age", "homeowner", "children_ages"}:
+        if field.name not in {
+            "age", "partner_age", "retirement_age", "partner_retirement_age",
+            "already_retired", "partner_already_retired", "homeowner",
+            "children_ages", "lifestyle_goals",
+        }:
             _number(getattr(h, field.name), field.name)
     for child in h.children_ages:
         _number(child, "Child age")
         if not isinstance(child, int) or child > 17:
             raise ValueError("Child ages must be whole numbers from 0 to 17.")
+    if len(h.lifestyle_goals) > 20:
+        raise ValueError("Enter no more than 20 lifestyle goals.")
+    categories = {"Hobby", "Gifts", "Holiday", "Debt", "New car", "Renovations",
+                  "Healthcare", "Aged care", "Other"}
+    frequencies = {"One-off", "Every month", "Every quarter", "Every year"}
+    first_retirement_age = h.age
+    if not h.already_retired and not h.partner_already_retired:
+        primary_retirement_age = h.retirement_age
+        partner_retirement_as_primary_age = (
+            h.age + h.partner_retirement_age - h.partner_age
+            if h.partner_age is not None else primary_retirement_age
+        )
+        first_retirement_age = min(primary_retirement_age, partner_retirement_as_primary_age)
+    for goal in h.lifestyle_goals:
+        if (not isinstance(goal, LifestyleGoal)
+                or not isinstance(goal.category, str)
+                or goal.category not in categories):
+            raise ValueError("Choose a supported lifestyle goal.")
+        _number(goal.amount, f"{goal.category} amount")
+        if isinstance(goal.start_age, bool) or not isinstance(goal.start_age, int) or not 18 <= goal.start_age <= 120:
+            raise ValueError("Lifestyle goal start ages must be whole numbers from 18 to 120.")
+        if isinstance(goal.finish_age, bool) or not isinstance(goal.finish_age, int) or not goal.start_age <= goal.finish_age <= 120:
+            raise ValueError("Lifestyle goal finish ages must be whole numbers at or after the start age.")
+        if not isinstance(goal.frequency, str) or goal.frequency not in frequencies:
+            raise ValueError("Choose a supported lifestyle goal frequency.")
+        if goal.start_age < first_retirement_age:
+            raise ValueError("Lifestyle goal start ages must be at or after the first retirement age.")
     for field in fields(a):
         _number(getattr(a, field.name), field.name, -0.99 if field.name in {
             "inflation", "wage_growth", "super_return", "investment_return",
@@ -167,35 +236,37 @@ class ContributionResult:
     warnings: list[dict]
 
 
-def _contributions(salary: float, sacrifice: float, after_tax: float,
-                   balances: list[float], shares: list[float], ages: list[int],
+def _contributions(salaries: list[float], sacrifices_requested: list[float],
+                   after_tax_requested: list[float], balances: list[float],
+                   ages: list[int],
                    cap: float) -> ContributionResult:
     """Trim sacrifice first; retain employer excess and return warnings."""
     additions, sacrifices, excesses, warnings = [], [], [], []
     actual_after_tax, rejected = 0.0, 0.0
-    for balance, share, age in zip(balances, shares, ages):
-        sg = salary * share * SUPER_GUARANTEE_RATE
+    for balance, salary, sacrifice, after_tax, age in zip(
+            balances, salaries, sacrifices_requested, after_tax_requested, ages):
+        sg = salary * SUPER_GUARANTEE_RATE
         # Salary sacrifice is an employer contribution; the under-75 limit
         # below applies to the modeled personal after-tax contributions only.
-        voluntary = min(sacrifice * share, salary * share, max(0.0, cap - sg))
+        voluntary = min(sacrifice, salary, max(0.0, cap - sg))
         excess = max(0.0, sg + voluntary - cap)
-        noncon = min(after_tax * share, NON_CONCESSIONAL_CAP) if age < 75 and balance < TRANSFER_BALANCE_CAP else 0.0
+        noncon = min(after_tax, NON_CONCESSIONAL_CAP) if age < 75 and balance < TRANSFER_BALANCE_CAP else 0.0
         additions.append(sg + voluntary - contributions_tax(sg + voluntary) + noncon)
         sacrifices.append(voluntary)
         excesses.append(excess)
         actual_after_tax += noncon
-        rejected += (sacrifice + after_tax) * share - voluntary - noncon
+        rejected += sacrifice + after_tax - voluntary - noncon
         person = len(additions)
-        if sacrifice * share > voluntary:
+        if sacrifice > voluntary:
             warnings.append(dict(code="salary_sacrifice_trimmed", person=person,
-                amount=sacrifice * share - voluntary,
+                amount=sacrifice - voluntary,
                 message="Salary sacrifice reduced to fit the modeled before-tax cap."))
         if excess:
             warnings.append(dict(code="excess_concessional", person=person, amount=excess,
                 message="Employer super exceeds the modeled cap. Excess is retained in super and added to taxable income with a 15% offset; extra tax is paid from household cash."))
-        if after_tax * share > noncon:
+        if after_tax > noncon:
             warnings.append(dict(code="after_tax_trimmed", person=person,
-                amount=after_tax * share - noncon,
+                amount=after_tax - noncon,
                 message="After-tax super contributions reduced under modeled caps or eligibility."))
     return ContributionResult(additions, sacrifices, excesses, actual_after_tax, rejected, warnings)
 
@@ -227,14 +298,21 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
     for year in range(horizon + 1):
         age = h.age + year
         ages = [age, h.partner_age + year] if couple else [age]
-        retired = age >= h.retirement_age
+        retirement_ages = [h.retirement_age, h.partner_retirement_age] if couple else [h.retirement_age]
+        already_retired = [h.already_retired, h.partner_already_retired] if couple else [h.already_retired]
+        retired_people = [already_retired[i] or ages[i] >= retirement_ages[i]
+                         for i in range(len(ages))]
+        retired = any(retired_people)
         inflation = (1 + a.inflation) ** year
         pension_factor = (1 + a.pension_indexation) ** year
-        salary = 0.0 if retired else h.gross_salary * (1 + a.wage_growth) ** year
+        salaries = [h.gross_salary * share * (1 + a.wage_growth) ** year
+                    if not retired_people[i] else 0.0
+                    for i, share in enumerate(income_shares)]
+        salary = sum(salaries)
         other_income = h.other_income * inflation
         rent = h.annual_rent * inflation * (1 - a.rental_expense_share)
         for i, person_age in enumerate(ages):
-            if retired and person_age >= PRESERVATION_AGE and not pension_started[i]:
+            if retired_people[i] and person_age >= PRESERVATION_AGE and not pension_started[i]:
                 transfer = min(accumulation[i], TRANSFER_BALANCE_CAP)
                 pensions[i] += transfer
                 accumulation[i] -= transfer
@@ -246,7 +324,8 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
             non_financial_assets=property_value / pension_factor,
             other_assessable_annual_income=(salary + other_income + rent) / pension_factor,
         ).annual_pension * pension_factor
-        minimum = [balance * minimum_drawdown_rate(person_age) for balance, person_age in zip(pensions, ages)]
+        minimum = [balance * minimum_drawdown_rate(person_age) if retired_people[i] else 0.0
+                   for i, (balance, person_age) in enumerate(zip(pensions, ages))]
         cash_interest = liquid[0] * a.cash_return
         liquid[1] *= 1 + a.investment_return
         opening_accumulation = accumulation.copy()
@@ -254,10 +333,13 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
             accumulation[i] *= 1 + a.super_return * (1 - ACCUMULATION_EARNINGS_TAX_RATE) - a.super_fees
             pensions[i] *= 1 + a.super_return - a.super_fees
         cap = indexed_concessional_cap(year, a.wage_growth)
+        sacrifices_requested = [h.salary_sacrifice * share if not retired_people[i] else 0.0
+                                for i, share in enumerate(income_shares)]
+        after_tax_requested = [h.after_tax_contributions * share if not retired_people[i] else 0.0
+                               for i, share in enumerate(income_shares)]
         contributions = _contributions(
-            salary, h.salary_sacrifice if not retired else 0.0,
-            h.after_tax_contributions if not retired else 0.0,
-            opening_accumulation, income_shares, ages, cap,
+            salaries, sacrifices_requested, after_tax_requested,
+            opening_accumulation, ages, cap,
         )
         additions, sacrifices = contributions.additions, contributions.sacrifices
         after_tax, rejected = contributions.after_tax, contributions.rejected
@@ -270,7 +352,7 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         eligible = [person_age >= AGE_PENSION_AGE for person_age in ages]
         count = sum(eligible)
         taxable_incomes = [max(0.0,
-            (salary + other_income + rent + cash_interest) * share - sacrifices[i]
+            salaries[i] + (other_income + rent + cash_interest) * share - sacrifices[i]
             + (pension / count if eligible[i] else 0.0))
             for i, share in enumerate(income_shares)]
         base_tax = sum(total_income_tax(income) for income in taxable_incomes)
@@ -281,7 +363,17 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         debt, debt_paid = _pay_loan(debt, a.other_debt_rate, debt_payment)
         children_cost = sum(child + year < 18 for child in h.children_ages) * a.annual_child_cost * inflation
         target = (h.retirement_income if retired else h.annual_spending) * inflation
-        expenses = target + children_cost + mortgage_paid + debt_paid + after_tax
+        goal_factors = {"One-off": 1, "Every month": 12,
+                        "Every quarter": 4, "Every year": 1}
+        lifestyle_goal_costs = sum(
+            goal.amount * goal_factors[goal.frequency]
+            for goal in h.lifestyle_goals
+            if retired and (
+                (goal.frequency == "One-off" and age == goal.start_age)
+                or (goal.frequency != "One-off" and goal.start_age <= age <= goal.finish_age)
+            )
+        ) * inflation
+        expenses = target + lifestyle_goal_costs + children_cost + mortgage_paid + debt_paid + after_tax
         net_income = salary + other_income + rent + cash_interest + pension - sacrifice - tax
         minimum_taken = sum(min(balance, amount) for balance, amount in zip(pensions, minimum))
         pensions = [max(0.0, balance - amount) for balance, amount in zip(pensions, minimum)]
@@ -291,13 +383,17 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         need -= liquid_taken
         super_taken = 0.0
         if retired:
-            super_taken += _withdraw(pensions, need)
+            for i, balance in enumerate(pensions):
+                amount = min(balance, max(0.0, need - super_taken)) if retired_people[i] else 0.0
+                pensions[i] -= amount
+                super_taken += amount
             need -= super_taken
             # Accessible excess accumulation stays taxable until withdrawn.
-            accessible = [balance if person_age >= PRESERVATION_AGE else 0.0 for balance, person_age in zip(accumulation, ages)]
+            accessible = [balance if retired_people[i] and person_age >= PRESERVATION_AGE else 0.0
+                          for i, (balance, person_age) in enumerate(zip(accumulation, ages))]
             excess_taken = _withdraw(accessible, need)
             for i, person_age in enumerate(ages):
-                if person_age >= PRESERVATION_AGE:
+                if retired_people[i] and person_age >= PRESERVATION_AGE:
                     accumulation[i] = accessible[i]
             super_taken += excess_taken
             need -= excess_taken
@@ -305,7 +401,7 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         # Debt service has priority over living costs/contributions. If even the
         # debt service is unfunded, restore its unpaid amount to the loan rather
         # than inventing repayment. No further interest on arrears is modeled.
-        unpaid_debt = max(0.0, need - target - children_cost - after_tax)
+        unpaid_debt = max(0.0, need - target - lifestyle_goal_costs - children_cost - after_tax)
         restored_other = min(debt_paid, unpaid_debt)
         debt += restored_other
         debt_paid -= restored_other
@@ -318,7 +414,9 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
         super_balance = sum(accumulation) + sum(pensions)
         rows.append(dict(
             year=year, age=age, partner_age=ages[1] if couple else None,
-            retired=retired, inflation_factor=inflation,
+            retired=retired, primary_retired=retired_people[0],
+            partner_retired=retired_people[1] if couple else None,
+            inflation_factor=inflation,
             super=super_balance, pension_super=sum(pensions), accumulation_super=sum(accumulation),
             investments=liquid[1], cash=liquid[0], property=property_value,
             mortgage=mortgage, other_debts=debt,
@@ -330,7 +428,8 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
             super_contributions=sum(additions), rejected_contributions=rejected,
             concessional_cap=cap, excess_concessional_contributions=sum(contributions.excesses),
             excess_contributions_tax=excess_tax,
-            net_income=net_income, target_income=target, child_costs=children_cost,
+            net_income=net_income, target_income=target,
+            lifestyle_goal_costs=lifestyle_goal_costs, child_costs=children_cost,
             mortgage_payment=mortgage_paid, other_debt_payment=debt_paid,
             unpaid_debt_service=restored_mortgage + restored_other,
             total_expenses=expenses, shortfall=max(0.0, need),
@@ -354,7 +453,10 @@ def project(h: Household, a: Assumptions = DEFAULT_ASSUMPTIONS) -> pd.DataFrame:
 def todays_dollars(projection: pd.DataFrame) -> pd.DataFrame:
     """Return a copy with all monetary columns deflated, preserving ages/flags."""
     result = projection.copy()
-    metadata = {"year", "age", "partner_age", "retired", "inflation_factor"}
+    metadata = {
+        "year", "age", "partner_age", "retired", "primary_retired",
+        "partner_retired", "inflation_factor",
+    }
     for column in result.columns:
         if column not in metadata:
             result[column] = result[column] / result["inflation_factor"]
