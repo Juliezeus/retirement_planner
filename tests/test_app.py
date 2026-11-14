@@ -19,7 +19,7 @@ def open_app() -> AppTest:
 
 def finish_wizard(app: AppTest) -> AppTest:
     app.button(key="get_started").click().run()
-    for _ in range(6):
+    for _ in range(7):
         app.button(key="wizard_next").click().run()
         assert not app.exception
     return app
@@ -76,12 +76,28 @@ def test_couple_retirement_ages_and_already_retired_options() -> None:
     assert not app.exception
 
 
+def test_second_workflow_tab_opens_retirement_budget_before_lifestyle_goals() -> None:
+    app = open_app()
+    app.button(key="get_started").click().run()
+    app.button(key="workflow_tab_1").click().run()
+    assert app.session_state["screen"] == "wizard"
+    assert app.session_state["step"] == 5
+    assert any(element.value == "Retirement budget" for element in app.subheader)
+    assert app.text_input(key="input_retirement_income")
+    assert len(app.multiselect) == 0
+    app.button(key="wizard_next").click().run()
+    assert app.session_state["step"] == 6
+    assert any(element.value == "Lifestyle goals" for element in app.subheader)
+    assert app.multiselect(key="input_lifestyle_categories")
+    assert not app.exception
+
+
 def test_holiday_goal_is_included_in_projection() -> None:
     app = open_app()
     app.button(key="get_started").click().run()
     app.number_input(key="input_age").set_value(54).run()
     app.number_input(key="input_retirement_age").set_value(55).run()
-    for _ in range(5):
+    for _ in range(6):
         app.button(key="wizard_next").click().run()
     app.multiselect(key="input_lifestyle_categories").set_value(["Holiday"]).run()
     app.number_input(key="input_goal_holiday_amount").set_value(5_000).run()

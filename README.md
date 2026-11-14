@@ -69,10 +69,11 @@ are not modeled. There is no persistent server scenario storage.
    already retired. Each person's salary and contributions stop at their own age;
    the retirement spending goal starts when the first person retires. Use
    **Plan until age** to change the household horizon.
-3. In **How much you'll need**, choose an ASFA budget or enter your own living
-   budget, then select optional lifestyle goals. Each goal supports an amount,
-   one-off/monthly/quarterly/yearly frequency, and start/finish ages. Goal costs
-   are added above the regular retirement income and are modeled in today's dollars.
+3. In **How much you'll need**, first choose an ASFA budget or enter your own
+   living budget. Select **Next** to open the separate lifestyle-goals screen.
+   Each goal supports an amount, one-off/monthly/quarterly/yearly frequency, and
+   start/finish ages. Goal costs are added above the regular retirement income
+   and are modeled in today's dollars.
    ASFA budgets are for homeowners aged 65–84; renters may need extra housing costs.
 4. Select **See my results**. The headline always uses today's dollars. Use
    **Download results as CSV** to save the annual projection. The chart toggle

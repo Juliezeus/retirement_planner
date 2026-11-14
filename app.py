@@ -22,7 +22,10 @@ from engine.projection import (
 )
 from scenarios import dump_scenario, load_scenario, validate_inputs
 
-STEPS = ("About you", "Family", "Income", "Super", "Assets and debts", "Retirement goal")
+STEPS = (
+    "About you", "Family", "Income", "Super", "Assets and debts",
+    "Retirement budget", "Lifestyle goals",
+)
 LIFESTYLE_CATEGORIES = (
     "Hobby", "Gifts", "Holiday", "Debt", "New car", "Renovations",
     "Healthcare", "Aged care", "Other",
@@ -281,8 +284,9 @@ def assets(errors: list[str]) -> None:
         errors.append("Enter an investment property value if you have an investment property loan.")
 
 
-def retirement_goal(errors: list[str]) -> None:
+def retirement_budget(errors: list[str]) -> None:
     d = st.session_state.draft
+    st.markdown("Choose the annual income you want your household to have in retirement.")
     money_input("annual_spending", "Current living spending, per year", "After-tax living costs, excluding child costs, loan repayments and extra super contributions; these are added separately. Include rent if you rent your home.", errors)
     kind = "couple" if st.session_state.draft["partner_age"] is not None else "single"
     budgets = ASFA_ANNUAL_SPENDING[kind]
@@ -296,8 +300,11 @@ def retirement_goal(errors: list[str]) -> None:
     money_input("retirement_income", "Retirement living income goal, per year", "Annual after-tax household living budget in today's buying power. Child costs and debt repayments are added on top. $0 means no living budget.", errors)
     st.caption(f"ASFA {ASFA_QUARTER} budgets are for homeowners aged 65–84. Renters may need more for housing. Modest is a basic lifestyle; Comfortable allows more discretionary spending.")
     st.markdown(f"[About the ASFA budget figures]({ASFA_SOURCE})")
-    st.subheader("Add lifestyle goals")
-    st.markdown("Add expenses above your regular retirement income. Choose a goal to enter its amount, frequency and age range. Ages refer to your age; costs are counted during retirement only and use today's dollars.")
+
+
+def lifestyle_goals(errors: list[str]) -> None:
+    d = st.session_state.draft
+    st.markdown("Add any planned expenses above your regular retirement income. Complete each goal's amount, frequency and age range. Ages refer to your age; costs are counted during retirement only and use today's dollars.")
     existing = {}
     for goal in st.session_state.draft.get("lifestyle_goals", ()):
         details = asdict(goal) if isinstance(goal, LifestyleGoal) else goal
@@ -384,14 +391,17 @@ def wizard() -> None:
     if st.session_state.screen == "results":
         results()
         return
-    active_tab = 1 if step == 5 else 0
+    active_tab = 1 if step >= 5 else 0
     workflow_tabs(active_tab)
     if step < 5:
         st.caption(f"Where you're at now · Section {step + 1} of 5")
+    else:
+        st.header("How much you'll need")
+        st.caption(f"Section {step - 4} of 2 · Set your retirement budget, then add any extra lifestyle goals.")
     st.subheader(STEPS[step])
     errors: list[str] = []
     with st.container(border=True):
-        (about_you, family, income, super_step, assets, retirement_goal)[step](errors)
+        (about_you, family, income, super_step, assets, retirement_budget, lifestyle_goals)[step](errors)
     for error in errors:
         st.error(error)
     st.session_state.draft_errors = errors
@@ -402,8 +412,8 @@ def wizard() -> None:
             else:
                 st.session_state.step -= 1
             st.rerun()
-        if st.button("See my results" if step == 5 else "Next", type="primary", disabled=bool(errors), key="wizard_next"):
-            if step < 5:
+        if st.button("See my results" if step == 6 else "Next", type="primary", disabled=bool(errors), key="wizard_next"):
+            if step < 6:
                 st.session_state.step += 1
             else:
                 try:
