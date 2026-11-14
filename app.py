@@ -20,6 +20,7 @@ from engine.projection import (
     Household, LifestyleGoal, project, sustainable_income, money_lasts_until,
     todays_dollars,
 )
+from results_report import build_results_pdf
 from scenarios import dump_scenario, load_scenario, validate_inputs
 
 STEPS = (
@@ -534,14 +535,15 @@ def results() -> None:
         st.info(DISCLAIMER)
         return
     real, first_gap = todays_dollars(projection), money_lasts_until(projection)
+    pdf_data = build_results_pdf(h, a, real, sustainable, first_gap)
     st.download_button(
-        "Download results as CSV",
-        data=real.to_csv(index=False).encode("utf-8-sig"),
-        file_name="retirement-projection-todays-dollars.csv",
-        mime="text/csv",
+        "Download results as PDF",
+        data=pdf_data,
+        file_name="retirement-projection.pdf",
+        mime="application/pdf",
         on_click="ignore",
-        key="results_csv",
-        help="Download the year-by-year projection with balances, income, expenses and any shortfalls in today's dollars.",
+        key="results_pdf",
+        help="Download a shareable report with your estimate, assumptions, lifestyle goals and year-by-year projection.",
     )
     if h.lifestyle_goals:
         st.subheader("Lifestyle goals included")

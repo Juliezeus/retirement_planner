@@ -6,7 +6,11 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
 from config import ASFA_ANNUAL_SPENDING, DEFAULT_ASSUMPTIONS
-from engine.projection import Household, todays_dollars
+from engine.projection import (
+    Household, LifestyleGoal, money_lasts_until, project, sustainable_income,
+    todays_dollars,
+)
+from results_report import build_results_pdf
 
 APP = Path(__file__).resolve().parents[1] / "app.py"
 
@@ -28,7 +32,7 @@ def finish_wizard(app: AppTest) -> AppTest:
 def test_complete_single_flow_and_display_toggle_preserves_headline() -> None:
     app = finish_wizard(open_app())
     assert app.title[0].value == "Your retirement picture"
-    assert app.download_button(key="results_csv").label == "Download results as CSV"
+    assert app.download_button(key="results_pdf").label == "Download results as PDF"
     assert app.success
     assert any("licensed financial adviser" in x.value for x in app.info)
     headline = next(x.value for x in app.subheader if "You can afford" in x.value)
@@ -37,6 +41,24 @@ def test_complete_single_flow_and_display_toggle_preserves_headline() -> None:
     assert not app.exception
     assert next(x.value for x in app.subheader if "You can afford" in x.value) == headline
     assert app.session_state["calculation"][2] == calculation[2]
+
+
+def test_results_pdf_contains_a_valid_pdf_document() -> None:
+    household = replace(
+        Household(),
+        partner_age=43,
+        partner_retirement_age=63,
+        lifestyle_goals=(
+            LifestyleGoal("Holiday", 5_000, "Every year", 67, 72),
+        ),
+    )
+    projection = todays_dollars(project(household))
+    pdf = build_results_pdf(
+        household, DEFAULT_ASSUMPTIONS, projection,
+        sustainable_income(household), money_lasts_until(projection),
+    )
+    assert pdf.startswith(b"%PDF-")
+    assert pdf.rstrip().endswith(b"%%EOF")
 
 
 def test_couple_children_back_navigation_and_budget_pick() -> None:

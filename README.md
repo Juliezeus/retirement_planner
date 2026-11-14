@@ -76,7 +76,8 @@ are not modeled. There is no persistent server scenario storage.
    and are modeled in today's dollars.
    ASFA budgets are for homeowners aged 65–84; renters may need extra housing costs.
 4. Select **See my results**. The headline always uses today's dollars. Use
-   **Download results as CSV** to save the annual projection. The chart toggle
+   **Download results as PDF** to save a shareable summary with the estimate,
+   plan inputs, lifestyle goals and year-by-year projection. The chart toggle
    changes only chart values to future dollars; its dotted line deducts debt.
 5. Open **Assumptions used**, make changes and select **Apply assumptions**.
    Invalid edits are rejected while the previously applied assumptions remain.
